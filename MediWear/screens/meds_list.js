@@ -12,7 +12,6 @@ import {
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { AntDesign } from "@expo/vector-icons";
 import LoggingService from '../services/LoggingService';
-import MedicationLogService from '../services/MedicationLogService';
 
 import { getAuth, onAuthStateChanged } from "firebase/auth";
 import { db } from '../services/firebaseConfig';
@@ -135,37 +134,37 @@ export default function MedicineList({ navigation }) {
         );
 
         // Setup real-time listener
-const unsubscribe = onSnapshot(medsQuery, async (snapshot) => {
-    try {
-        const dateKey = getCurrentDateKey();
-        
-        const fetchedMedicines = snapshot.docs.map(doc => ({
-            id: doc.id,
-            ...doc.data(),
-        }));
-        
-        // ADD LOGGING HERE (only on initial load)
-        if (fetchedMedicines.length > 0 && medicines.length === 0) {
-            await LoggingService.addLog(
-                'system',
-                `Loaded ${fetchedMedicines.length} medicines from Firestore`,
-                `User ID: ${userId}`
-            );
-        }
-        
-        setMedicines(fetchedMedicines);
-        await loadMedicineStatuses(fetchedMedicines, dateKey);
-        setCurrentDate(getFormattedDate());
-        setIsLoading(false);
+        const unsubscribe = onSnapshot(medsQuery, async (snapshot) => {
+            try {
+                const dateKey = getCurrentDateKey();
+                
+                const fetchedMedicines = snapshot.docs.map(doc => ({
+                    id: doc.id,
+                    ...doc.data(),
+                }));
+                
+                // ADD LOGGING HERE (only on initial load)
+                if (fetchedMedicines.length > 0 && medicines.length === 0) {
+                    await LoggingService.addLog(
+                        'system',
+                        `Loaded ${fetchedMedicines.length} medicines from Firestore`,
+                        `User ID: ${userId}`
+                    );
+                }
+                
+                setMedicines(fetchedMedicines);
+                await loadMedicineStatuses(fetchedMedicines, dateKey);
+                setCurrentDate(getFormattedDate());
+                setIsLoading(false);
 
-    } catch (error) {
-        console.error("Error processing Firestore data:", error);
-        setIsLoading(false);
-    }
-}, (error) => {
-    console.error("Firestore subscription failed:", error);
-    setIsLoading(false);
-});
+            } catch (error) {
+                console.error("Error processing Firestore data:", error);
+                setIsLoading(false);
+            }
+        }, (error) => {
+            console.error("Firestore subscription failed:", error);
+            setIsLoading(false);
+        });
 
         return unsubscribe;
     };
@@ -292,38 +291,23 @@ const unsubscribe = onSnapshot(medsQuery, async (snapshot) => {
                         const tenMinutesAfterDose = new Date(doseTime.getTime() + 10 * 60000);
 
                         if (now > tenMinutesAfterDose && newStatus[med.id] === 'pending') {
-           newStatus[med.id] = 'missed';
-           hasChanges = true;
+                            newStatus[med.id] = 'missed';
+                            hasChanges = true;
 
-            const statusKey = `${STATUS_STORAGE_KEY}${med.id}_${dateKey}`;
-             await AsyncStorage.setItem(statusKey, 'missed');
+                            const statusKey = `${STATUS_STORAGE_KEY}${med.id}_${dateKey}`;
+                            await AsyncStorage.setItem(statusKey, 'missed');
 
- 
-            const currentTimeStr = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
-            const minutesLate = Math.floor((now - tenMinutesAfterDose) / 60000);
-            await LoggingService.addLog(
-               'missed',
-                `Missed dose detected: ${med.name}`,
-              `Scheduled: ${reminderTime}, Detected at: ${currentTimeStr} (${minutesLate} minutes late)`
-             );
- 
-             // NEW: Log missed dose to MedicationLogService
-try {
-    await MedicationLogService.logMedicationFromApp({
-        medication: med.name,
-        dosage: med.dosage || 'N/A',
-        action: 'missed',
-        status: 'missed',
-        notes: `Auto-detected missed dose. Scheduled: ${reminderTime}, Detected: ${currentTimeStr} (${minutesLate} min late)`
-    });
-} catch (logError) {
-    console.error('Failed to log missed dose to MedicationLogService:', logError);
-}
+                            const currentTimeStr = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+                            const minutesLate = Math.floor((now - tenMinutesAfterDose) / 60000);
+                            await LoggingService.addLog(
+                                'missed',
+                                `Missed dose detected: ${med.name}`,
+                                `Scheduled: ${reminderTime}, Detected at: ${currentTimeStr} (${minutesLate} minutes late)`
+                            );
 
-
-              await updateDailyProgress(med.id, 'missed', med.name);
-              break;
-                          }
+                            await updateDailyProgress(med.id, 'missed', med.name);
+                            break;
+                        }
                     }
                 }
             }
@@ -349,35 +333,35 @@ try {
                     text: "Cancel",
                     style: "cancel"
                 },
-               {
-    text: "Delete",
-    onPress: async () => {
-        try {
-            const medicine = medicines.find(m => m.id === id);
-            const medRef = doc(db, "medications", id);
-            await deleteDoc(medRef);
+                {
+                    text: "Delete",
+                    onPress: async () => {
+                        try {
+                            const medicine = medicines.find(m => m.id === id);
+                            const medRef = doc(db, "medications", id);
+                            await deleteDoc(medRef);
 
-            // ADD LOGGING HERE
-            await LoggingService.addLog(
-                'system',
-                `Medicine deleted: ${medicine?.name || 'Unknown'}`,
-                `Medicine ID: ${id}, Dosage: ${medicine?.dosage || 'N/A'}`
-            );
+                            // ADD LOGGING HERE
+                            await LoggingService.addLog(
+                                'system',
+                                `Medicine deleted: ${medicine?.name || 'Unknown'}`,
+                                `Medicine ID: ${id}, Dosage: ${medicine?.dosage || 'N/A'}`
+                            );
 
-            setMedicineStatus(prevStatus => {
-                const newStatus = { ...prevStatus };
-                delete newStatus[id];
-                return newStatus;
-            });
+                            setMedicineStatus(prevStatus => {
+                                const newStatus = { ...prevStatus };
+                                delete newStatus[id];
+                                return newStatus;
+                            });
 
-            Alert.alert('Success', 'Medicine deleted successfully');
-        } catch (error) {
-            console.error('Failed to delete medicine:', error);
-            Alert.alert('Error', 'Failed to delete medicine. Please check your network connection.');
-        }
-    },
-    style: "destructive"
-},
+                            Alert.alert('Success', 'Medicine deleted successfully');
+                        } catch (error) {
+                            console.error('Failed to delete medicine:', error);
+                            Alert.alert('Error', 'Failed to delete medicine. Please check your network connection.');
+                        }
+                    },
+                    style: "destructive"
+                },
             ]
         );
     };
@@ -388,57 +372,43 @@ try {
         });
     };
 
-const handleTaken = async (medicineId) => {
-    const dateKey = getCurrentDateKey();
-    const statusKey = `${STATUS_STORAGE_KEY}${medicineId}_${dateKey}`;
+    const handleTaken = async (medicineId) => {
+        const dateKey = getCurrentDateKey();
+        const statusKey = `${STATUS_STORAGE_KEY}${medicineId}_${dateKey}`;
 
-    try {
-        const currentStatus = medicineStatus[medicineId];
-        if (currentStatus === 'taken') {
-            Alert.alert('Info', 'This medicine is already marked as taken for today.');
-            return;
-        }
-
-        await AsyncStorage.setItem(statusKey, 'taken');
-
-        const medicine = medicines.find(med => med.id === medicineId);
-        const medicineName = medicine ? medicine.name : 'Unknown';
-        const medicineDosage = medicine ? medicine.dosage : 'N/A';
-
-        // Existing logging
-        await LoggingService.addLog(
-            'taken',
-            `Medicine marked as taken: ${medicineName}`,
-            `Dosage: ${medicineDosage}, Time: ${new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}, Status: ${currentStatus === 'missed' ? 'late (was missed)' : 'on-time'}`
-        );
-
-        // NEW: Log to MedicationLogService for watch/app logs sync
         try {
-            await MedicationLogService.logMedicationFromApp({
-                medication: medicineName,
-                dosage: medicineDosage,
-                action: 'taken',
-                status: currentStatus === 'missed' ? 'late' : 'on-time',
-                notes: currentStatus === 'missed' ? 'Taken late after being marked as missed' : 'Taken on time from app'
-            });
-        } catch (logError) {
-            console.error('Failed to log to MedicationLogService:', logError);
-            // Don't show error to user, just log it
+            const currentStatus = medicineStatus[medicineId];
+            if (currentStatus === 'taken') {
+                Alert.alert('Info', 'This medicine is already marked as taken for today.');
+                return;
+            }
+
+            await AsyncStorage.setItem(statusKey, 'taken');
+
+            const medicine = medicines.find(med => med.id === medicineId);
+            const medicineName = medicine ? medicine.name : 'Unknown';
+            const medicineDosage = medicine ? medicine.dosage : 'N/A';
+
+            // Log to LoggingService
+            await LoggingService.addLog(
+                'taken',
+                `Medicine marked as taken: ${medicineName}`,
+                `Dosage: ${medicineDosage}, Time: ${new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}, Status: ${currentStatus === 'missed' ? 'late (was missed)' : 'on-time'}`
+            );
+
+            await updateDailyProgress(medicineId, 'taken', medicineName);
+
+            setMedicineStatus(prevStatus => ({
+                ...prevStatus,
+                [medicineId]: 'taken',
+            }));
+
+            Alert.alert('Success', 'Medicine marked as taken!');
+        } catch (error) {
+            console.error('Failed to update medicine status:', error);
+            Alert.alert('Error', 'Failed to update status.');
         }
-
-        await updateDailyProgress(medicineId, 'taken', medicineName);
-
-        setMedicineStatus(prevStatus => ({
-            ...prevStatus,
-            [medicineId]: 'taken',
-        }));
-
-        Alert.alert('Success', 'Medicine marked as taken!');
-    } catch (error) {
-        console.error('Failed to update medicine status:', error);
-        Alert.alert('Error', 'Failed to update status.');
-    }
-};
+    };
 
     const updateDailyProgress = async (medicineId, status, medicineName = 'Unknown') => {
         const dateKey = getCurrentDateKey();
