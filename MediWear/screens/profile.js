@@ -4,15 +4,12 @@ import {
   Text, 
   TextInput, 
   TouchableOpacity, 
-  Image, 
   Alert, 
   ScrollView,
   StyleSheet,
-  Platform
 } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import Icon from 'react-native-vector-icons/Ionicons';
-import * as ImagePicker from 'expo-image-picker';
 
 export default function Profile() {
   const [name, setName] = useState("");
@@ -20,7 +17,6 @@ export default function Profile() {
   const [email, setEmail] = useState("");
   const [phone, setPhone] = useState("");
   const [address, setAddress] = useState("");
-  const [profileImage, setProfileImage] = useState(null);
   const [isEditing, setIsEditing] = useState(false);
 
   useEffect(() => {
@@ -37,11 +33,6 @@ export default function Profile() {
         setEmail(user.email || "");
         setPhone(user.phone || "");
         setAddress(user.address || "");
-      }
-
-      const savedImage = await AsyncStorage.getItem("profileImage");
-      if (savedImage) {
-        setProfileImage(savedImage);
       }
     } catch (error) {
       console.error("Error loading profile:", error);
@@ -69,125 +60,12 @@ export default function Profile() {
       
       await AsyncStorage.setItem("userData", JSON.stringify(profileData));
       
-      if (profileImage) {
-        await AsyncStorage.setItem("profileImage", profileImage);
-      }
-      
       setIsEditing(false);
       Alert.alert("Success", "Profile updated successfully!");
     } catch (error) {
       Alert.alert("Error", "Failed to save profile");
       console.error("Error saving profile:", error);
     }
-  };
-
-  const pickImageFromGallery = async () => {
-    try {
-      // Request permission
-      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-      
-      if (status !== 'granted') {
-        Alert.alert(
-          'Permission Required',
-          'Sorry, we need camera roll permissions to change your profile picture.'
-        );
-        return;
-      }
-
-      // Launch image picker
-      const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.Images,
-        allowsEditing: true,
-        aspect: [1, 1],
-        quality: 0.7,
-      });
-
-      console.log('Gallery Result:', result);
-
-      if (!result.canceled && result.assets && result.assets[0]) {
-        const imageUri = result.assets[0].uri;
-        setProfileImage(imageUri);
-        await AsyncStorage.setItem("profileImage", imageUri);
-        Alert.alert("Success", "Profile photo updated!");
-      }
-    } catch (error) {
-      console.error('Gallery Error:', error);
-      Alert.alert('Error', 'Failed to pick image from gallery');
-    }
-  };
-
-  const takePhoto = async () => {
-    try {
-      // Request permission
-      const { status } = await ImagePicker.requestCameraPermissionsAsync();
-      
-      if (status !== 'granted') {
-        Alert.alert(
-          'Permission Required',
-          'Sorry, we need camera permissions to take a photo.'
-        );
-        return;
-      }
-
-      // Launch camera
-      const result = await ImagePicker.launchCameraAsync({
-        allowsEditing: true,
-        aspect: [1, 1],
-        quality: 0.7,
-      });
-
-      console.log('Camera Result:', result);
-
-      if (!result.canceled && result.assets && result.assets[0]) {
-        const imageUri = result.assets[0].uri;
-        setProfileImage(imageUri);
-        await AsyncStorage.setItem("profileImage", imageUri);
-        Alert.alert("Success", "Profile photo updated!");
-      }
-    } catch (error) {
-      console.error('Camera Error:', error);
-      Alert.alert('Error', 'Failed to take photo');
-    }
-  };
-
-  const pickImage = () => {
-    Alert.alert(
-      "Change Profile Photo",
-      "Choose an option",
-      [
-        {
-          text: "Take Photo",
-          onPress: takePhoto
-        },
-        {
-          text: "Choose from Gallery",
-          onPress: pickImageFromGallery
-        },
-        {
-          text: "Cancel",
-          style: "cancel"
-        }
-      ]
-    );
-  };
-
-  const removeImage = () => {
-    Alert.alert(
-      "Remove Photo",
-      "Are you sure you want to remove your profile photo?",
-      [
-        { text: "Cancel", style: "cancel" },
-        {
-          text: "Remove",
-          onPress: async () => {
-            setProfileImage(null);
-            await AsyncStorage.removeItem("profileImage");
-            Alert.alert("Success", "Profile photo removed!");
-          },
-          style: "destructive"
-        }
-      ]
-    );
   };
 
   const getInitials = (fullName) => {
@@ -211,37 +89,12 @@ export default function Profile() {
         <View style={styles.profilePhotoSection}>
           <View style={styles.profilePhotoWrapper}>
             <View style={styles.profilePhotoContainer}>
-              {profileImage ? (
-                <Image 
-                  source={{ uri: profileImage }} 
-                  style={styles.profileImage}
-                />
-              ) : (
-                <View style={styles.profileInitialsContainer}>
-                  <Text style={styles.profileInitials}>
-                    {getInitials(name)}
-                  </Text>
-                </View>
-              )}
+              <View style={styles.profileInitialsContainer}>
+                <Text style={styles.profileInitials}>
+                  {getInitials(name)}
+                </Text>
+              </View>
             </View>
-            
-            {/* Camera Button */}
-            <TouchableOpacity
-              onPress={pickImage}
-              style={styles.cameraButton}
-            >
-              <Icon name="camera" size={20} color="#FFFFFF" />
-            </TouchableOpacity>
-
-            {/* Remove Photo Button */}
-            {profileImage && (
-              <TouchableOpacity
-                onPress={removeImage}
-                style={styles.removeButton}
-              >
-                <Icon name="close" size={20} color="#FFFFFF" />
-              </TouchableOpacity>
-            )}
           </View>
 
           {/* User Name */}
@@ -440,11 +293,6 @@ const styles = StyleSheet.create({
     borderColor: "#FFFFFF",
     overflow: "hidden"
   },
-  profileImage: {
-    width: "100%",
-    height: "100%",
-    resizeMode: "cover"
-  },
   profileInitialsContainer: {
     width: "100%",
     height: "100%",
@@ -456,42 +304,6 @@ const styles = StyleSheet.create({
     fontSize: 56,
     color: "#FFFFFF",
     fontWeight: "bold"
-  },
-  cameraButton: {
-    position: "absolute",
-    bottom: 8,
-    right: 8,
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-    backgroundColor: "#667eea",
-    justifyContent: "center",
-    alignItems: "center",
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
-    elevation: 8,
-    borderWidth: 3,
-    borderColor: "#FFFFFF"
-  },
-  removeButton: {
-    position: "absolute",
-    top: 8,
-    right: 8,
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: "#FF5252",
-    justifyContent: "center",
-    alignItems: "center",
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.3,
-    shadowRadius: 4,
-    elevation: 6,
-    borderWidth: 2,
-    borderColor: "#FFFFFF"
   },
   userName: {
     fontSize: 28,
