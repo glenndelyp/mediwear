@@ -10,53 +10,31 @@ import {
   RefreshControl,
 } from 'react-native';
 import Ionicons from 'react-native-vector-icons/Ionicons';
-import firestore from '@react-native-firebase/firestore';
 import BluetoothService from '../services/BluetoothService';
 
 export default function LogScreen() {
   const [watchLogs, setWatchLogs] = useState([]);
-  const [appLogs, setAppLogs] = useState([]);
-  const [activeTab, setActiveTab] = useState('watch'); // 'watch' or 'app'
   const [isLoading, setIsLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [connectedDevice, setConnectedDevice] = useState(null);
 
   useEffect(() => {
-    console.log('LogScreen mounted');
-    
-    const initialize = async () => {
-      await MedicationLogService.initialize();
-    };
-    
-    initialize();
-
     const unsubscribe = BluetoothService.subscribe(handleBluetoothData);
     checkConnection();
 
-    // Subscribe to watch logs
-    const unsubscribeWatchLogs = MedicationLogService.subscribeToWatchLogs(setWatchLogs);
-    
-    // Subscribe to app logs
-    const unsubscribeAppLogs = MedicationLogService.subscribeToAppLogs(setAppLogs);
-
     return () => {
-      console.log('LogScreen unmounted');
       unsubscribe();
-      unsubscribeWatchLogs();
-      unsubscribeAppLogs();
     };
   }, []);
 
   const checkConnection = async () => {
     try {
       const status = BluetoothService.getConnectionStatus();
-      console.log('Connection status:', status);
       
       if (status.isConnected && status.device) {
         setConnectedDevice(status.device);
-        console.log('Device connected:', status.device.name);
       } else {
-        console.log('No device connected');
+        setConnectedDevice(null);
       }
     } catch (error) {
       console.error('Error checking connection:', error);
@@ -64,65 +42,53 @@ export default function LogScreen() {
   };
 
   const handleBluetoothData = async (data) => {
-    console.log('Received data:', data.type);
-    
     switch (data.type) {
       case 'LOGS_DATA':
-        console.log('Processing logs:', data.logs.length, 'items');
-        try {
-          const result = await MedicationLogService.saveWatchLogs(data.logs);
-          Alert.alert('Success', `Synced ${result.count} logs to cloud`);
-        } catch (error) {
-          Alert.alert('Error', 'Failed to sync logs: ' + error.message);
-        }
+        setWatchLogs(data.logs.map((log, index) => ({
+          ...log,
+          id: `${Date.now()}_${index}`
+        })));
+        Alert.alert('Synced', `${data.logs.length} logs received from watch`);
         break;
         
       case 'SUCCESS':
-        console.log('Command success:', data.command);
         if (data.command === 'CLEAR_LOGS') {
-          Alert.alert('Success', 'Logs cleared on device');
+          setWatchLogs([]);
+          Alert.alert('Cleared', 'Logs removed from watch');
         }
         break;
         
       case 'ERROR':
-        console.log('Error received:', data.message);
         Alert.alert('Error', data.message);
         break;
 
       case 'DISCONNECTED':
-        console.log('Device disconnected');
         setConnectedDevice(null);
-        Alert.alert('Disconnected', 'Device has been disconnected');
+        Alert.alert('Disconnected', 'Watch connection lost');
         break;
     }
   };
 
   const clearAllLogs = async () => {
-    const logType = activeTab === 'watch' ? 'watch' : 'app';
-    const logTypeName = activeTab === 'watch' ? 'Watch' : 'App';
-    
+    if (!connectedDevice) {
+      Alert.alert('Not Connected', 'Please connect to your watch first');
+      return;
+    }
+
     Alert.alert(
-      `Clear ${logTypeName} Logs`,
-      `This will permanently delete ALL ${logTypeName.toLowerCase()} logs from the cloud. This cannot be undone. Continue?`,
+      'Clear Watch Logs',
+      'Remove all medication logs from your watch?',
       [
         { text: 'Cancel', style: 'cancel' },
         {
-          text: 'Delete All',
+          text: 'Clear',
           style: 'destructive',
           onPress: async () => {
             setIsLoading(true);
             try {
-              const result = await MedicationLogService.clearAllLogs(logType);
-              
-              // Also clear on device if watch logs and device is connected
-              if (logType === 'watch' && connectedDevice) {
-                await BluetoothService.clearLogs();
-              }
-              
-              Alert.alert('Success', `Deleted ${result.count} ${logTypeName.toLowerCase()} logs from cloud`);
+              await BluetoothService.clearLogs();
             } catch (error) {
-              console.error('Error deleting logs:', error);
-              Alert.alert('Error', 'Failed to delete logs: ' + error.message);
+              Alert.alert('Error', 'Failed to clear logs: ' + error.message);
             } finally {
               setIsLoading(false);
             }
@@ -134,7 +100,7 @@ export default function LogScreen() {
 
   const onRefresh = async () => {
     setRefreshing(true);
-    // Firestore real-time listener will automatically update
+    await checkConnection();
     setTimeout(() => setRefreshing(false), 500);
   };
 
@@ -162,89 +128,82 @@ export default function LogScreen() {
     }
   };
 
+  const getActionIcon = (action) => {
+    switch (action?.toLowerCase()) {
+      case 'taken':
+        return 'checkmark-circle';
+      case 'snoozed':
+        return 'time';
+      case 'missed':
+        return 'close-circle';
+      default:
+        return 'help-circle';
+    }
+  };
+
   const renderLog = ({ item, index }) => (
     <View style={styles.logCard}>
-      <View style={styles.logHeader}>
-        <View style={styles.logBadge}>
-          <Text style={styles.logNumber}>#{index + 1}</Text>
+      <View style={styles.cardHeader}>
+        <View style={styles.indexBadge}>
+          <Text style={styles.indexText}>{index + 1}</Text>
         </View>
-        <View style={styles.flex1}>
+        <View style={styles.medicationInfo}>
           <Text style={styles.medicationName}>{item.medication}</Text>
-          <Text style={styles.dosage}>{item.dosage}</Text>
+          <Text style={styles.dosageText}>{item.dosage}</Text>
         </View>
         <View style={[styles.actionBadge, { backgroundColor: getActionColor(item.action) }]}>
+          <Ionicons name={getActionIcon(item.action)} size={16} color="white" />
           <Text style={styles.actionText}>{item.action}</Text>
         </View>
       </View>
 
-      <View style={styles.logFooter}>
-        {activeTab === 'watch' && item.snooze_count !== undefined && (
-          <View style={styles.infoRow}>
-            <Ionicons name="repeat-outline" size={14} color="#6b7280" />
-            <Text style={styles.infoText}>Snooze: {item.snooze_count}</Text>
+      <View style={styles.cardFooter}>
+        {item.snooze_count !== undefined && item.snooze_count > 0 && (
+          <View style={styles.infoChip}>
+            <Ionicons name="alarm-outline" size={13} color="#f59e0b" />
+            <Text style={styles.infoChipText}>{item.snooze_count}x snoozed</Text>
           </View>
         )}
-        <View style={styles.infoRow}>
-          <Ionicons 
-            name={activeTab === 'watch' ? 'watch-outline' : 'phone-portrait-outline'} 
-            size={14} 
-            color="#6b7280" 
-          />
-          <Text style={styles.infoText}>
-            {activeTab === 'watch' ? 'From Watch' : 'From App'}
-          </Text>
-        </View>
-        <View style={styles.infoRow}>
-          <Ionicons name="time-outline" size={14} color="#6b7280" />
-          <Text style={styles.infoText}>
+        <View style={styles.infoChip}>
+          <Ionicons name="time-outline" size={13} color="#6b7280" />
+          <Text style={styles.infoChipText}>
             {item.datetime || formatDateTime(item.timestamp)}
           </Text>
         </View>
       </View>
-
-      {activeTab === 'app' && item.notes && (
-        <View style={styles.notesContainer}>
-          <Text style={styles.notesLabel}>Note:</Text>
-          <Text style={styles.notesText}>{item.notes}</Text>
-        </View>
-      )}
-
-      {activeTab === 'app' && item.status && (
-        <View style={styles.statusBadge}>
-          <Text style={styles.statusText}>
-            {item.status === 'late' ? '⏰ Taken Late' : '✓ On Time'}
-          </Text>
-        </View>
-      )}
     </View>
   );
 
-  const currentLogs = activeTab === 'watch' ? watchLogs : appLogs;
-  const totalLogs = activeTab === 'watch' ? watchLogs.length : appLogs.length;
-
   return (
     <View style={styles.container}>
-      {/* Connection Status Banner - Only show for watch tab */}
-      {activeTab === 'watch' && !connectedDevice && (
-        <View style={styles.warningBanner}>
-          <Ionicons name="warning-outline" size={20} color="#92400e" />
-          <Text style={styles.warningText}>No device connected</Text>
+      {/* Connection Status Banner */}
+      {!connectedDevice && (
+        <View style={styles.statusBanner}>
+          <View style={styles.statusContent}>
+            <Ionicons name="bluetooth-outline" size={20} color="#f59e0b" />
+            <Text style={styles.statusText}>Watch not connected</Text>
+          </View>
+        </View>
+      )}
+
+      {connectedDevice && (
+        <View style={[styles.statusBanner, styles.connectedBanner]}>
+          <View style={styles.statusContent}>
+            <Ionicons name="bluetooth" size={20} color="#10b981" />
+            <Text style={[styles.statusText, styles.connectedText]}>
+              {connectedDevice.name || 'Watch connected'}
+            </Text>
+          </View>
         </View>
       )}
 
       {/* Header */}
       <View style={styles.header}>
-        <View>
+        <View style={styles.headerLeft}>
           <Text style={styles.title}>Medication Logs</Text>
-          <Text style={styles.subtitle}>
-            {activeTab === 'watch' 
-              ? connectedDevice 
-                ? `Connected: ${connectedDevice.name || 'Device'}`
-                : 'Not connected'
-              : 'Logged from app'
-            }
-          </Text>
-          <Text style={styles.subtitle}>Total: {totalLogs} logs</Text>
+          <View style={styles.countBadge}>
+            <Text style={styles.countText}>{watchLogs.length} entries</Text>
+          </View>
         </View>
         <TouchableOpacity 
           onPress={onRefresh} 
@@ -254,108 +213,38 @@ export default function LogScreen() {
           {isLoading ? (
             <ActivityIndicator size="small" color="#9D4EDD" />
           ) : (
-            <Ionicons name="cloud-outline" size={24} color="#9D4EDD" />
+            <Ionicons name="reload" size={24} color="#9D4EDD" />
           )}
         </TouchableOpacity>
       </View>
 
-      {/* Tabs */}
-      <View style={styles.tabContainer}>
+      {/* Action Buttons */}
+      <View style={styles.actionBar}>
         <TouchableOpacity
-          style={[styles.tab, activeTab === 'watch' && styles.activeTab]}
-          onPress={() => setActiveTab('watch')}
-        >
-          <Ionicons 
-            name="watch-outline" 
-            size={20} 
-            color={activeTab === 'watch' ? '#9D4EDD' : '#6b7280'} 
-          />
-          <Text style={[
-            styles.tabText, 
-            activeTab === 'watch' && styles.activeTabText
-          ]}>
-            Watch Logs
-          </Text>
-          <View style={[
-            styles.badge,
-            activeTab === 'watch' && styles.activeBadge
-          ]}>
-            <Text style={[
-              styles.badgeText,
-              activeTab === 'watch' && styles.activeBadgeText
-            ]}>
-              {watchLogs.length}
-            </Text>
-          </View>
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={[styles.tab, activeTab === 'app' && styles.activeTab]}
-          onPress={() => setActiveTab('app')}
-        >
-          <Ionicons 
-            name="phone-portrait-outline" 
-            size={20} 
-            color={activeTab === 'app' ? '#9D4EDD' : '#6b7280'} 
-          />
-          <Text style={[
-            styles.tabText, 
-            activeTab === 'app' && styles.activeTabText
-          ]}>
-            App Logs
-          </Text>
-          <View style={[
-            styles.badge,
-            activeTab === 'app' && styles.activeBadge
-          ]}>
-            <Text style={[
-              styles.badgeText,
-              activeTab === 'app' && styles.activeBadgeText
-            ]}>
-              {appLogs.length}
-            </Text>
-          </View>
-        </TouchableOpacity>
-      </View>
-
-      {/* Action Button */}
-      <View style={styles.actionContainer}>
-        <TouchableOpacity
-          style={[styles.actionBtn, styles.dangerBtn, isLoading && styles.btnDisabled]}
+          style={[
+            styles.actionButton, 
+            styles.clearButton,
+            (!connectedDevice || isLoading) && styles.buttonDisabled
+          ]}
           onPress={clearAllLogs}
-          disabled={isLoading}
+          disabled={!connectedDevice || isLoading}
         >
           <Ionicons name="trash-outline" size={18} color="white" />
-          <Text style={styles.btnText}>
-            Delete All {activeTab === 'watch' ? 'Watch' : 'App'} Logs
-          </Text>
+          <Text style={styles.buttonText}>Clear Watch Logs</Text>
         </TouchableOpacity>
       </View>
 
-      {/* Info Banner */}
-      <View style={[
-        styles.infoBanner,
-        activeTab === 'app' && styles.infoBannerBlue
-      ]}>
-        <Ionicons 
-          name={activeTab === 'watch' ? 'cloud-done-outline' : 'phone-portrait-outline'} 
-          size={16} 
-          color={activeTab === 'watch' ? '#10b981' : '#3b82f6'} 
-        />
-        <Text style={[
-          styles.infoTextGreen,
-          activeTab === 'app' && styles.infoTextBlue
-        ]}>
-          {activeTab === 'watch' 
-            ? 'Auto-synced to cloud • Press "PUSH TO APP" on device to sync'
-            : 'Medications you marked as taken in the app'
-          }
+      {/* Info Card */}
+      <View style={styles.infoCard}>
+        <Ionicons name="information-circle" size={20} color="#9D4EDD" />
+        <Text style={styles.infoCardText}>
+          Press "PUSH TO APP" on your watch to sync medication logs
         </Text>
       </View>
 
       {/* Logs List */}
       <FlatList
-        data={currentLogs}
+        data={watchLogs}
         renderItem={renderLog}
         keyExtractor={(item) => item.id}
         contentContainerStyle={styles.listContent}
@@ -364,24 +253,19 @@ export default function LogScreen() {
             refreshing={refreshing}
             onRefresh={onRefresh}
             colors={['#9D4EDD']}
+            tintColor="#9D4EDD"
           />
         }
         ListEmptyComponent={
           <View style={styles.emptyState}>
-            <Ionicons 
-              name={activeTab === 'watch' ? 'cloud-offline-outline' : 'document-text-outline'} 
-              size={80} 
-              color="#d1d5db" 
-            />
-            <Text style={styles.emptyText}>
-              No {activeTab === 'watch' ? 'watch' : 'app'} logs
-            </Text>
+            <View style={styles.emptyIconContainer}>
+              <Ionicons name="document-text-outline" size={64} color="#d1d5db" />
+            </View>
+            <Text style={styles.emptyTitle}>No logs yet</Text>
             <Text style={styles.emptySubtext}>
-              {activeTab === 'watch'
-                ? !connectedDevice
-                  ? 'Connect to device and press "PUSH TO APP" to sync logs'
-                  : 'Press "PUSH TO APP" on your device to sync logs'
-                : 'Medications you mark as taken in the app will appear here'
+              {!connectedDevice
+                ? 'Connect your watch and press "PUSH TO APP" to view medication logs'
+                : 'Press "PUSH TO APP" on your watch to sync logs'
               }
             </Text>
           </View>
@@ -394,261 +278,225 @@ export default function LogScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#f9fafb',
+    backgroundColor: '#f5f5f7',
   },
-  warningBanner: {
+  statusBanner: {
     backgroundColor: '#fef3c7',
     paddingVertical: 12,
     paddingHorizontal: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: '#fde68a',
+  },
+  connectedBanner: {
+    backgroundColor: '#d1fae5',
+    borderBottomColor: '#a7f3d0',
+  },
+  statusContent: {
     flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'center',
     gap: 8,
-    borderBottomWidth: 1,
-    borderBottomColor: '#fbbf24',
   },
-  warningText: {
-    color: '#92400e',
+  statusText: {
     fontSize: 14,
     fontWeight: '600',
+    color: '#92400e',
+  },
+  connectedText: {
+    color: '#065f46',
   },
   header: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingTop: 16,
-    paddingBottom: 12,
+    paddingHorizontal: 20,
+    paddingVertical: 20,
     backgroundColor: 'white',
-    borderBottomWidth: 1,
-    borderBottomColor: '#e5e7eb',
+  },
+  headerLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
   },
   title: {
-    fontSize: 24,
+    fontSize: 28,
     fontWeight: 'bold',
-    color: '#1f2937',
+    color: '#1a1a1a',
   },
-  subtitle: {
+  countBadge: {
+    backgroundColor: '#f3e8ff',
+    paddingHorizontal: 12,
+    paddingVertical: 4,
+    borderRadius: 12,
+  },
+  countText: {
     fontSize: 13,
-    color: '#6b7280',
-    marginTop: 2,
+    fontWeight: '600',
+    color: '#9D4EDD',
   },
   refreshBtn: {
-    padding: 8,
-  },
-  tabContainer: {
-    flexDirection: 'row',
-    backgroundColor: 'white',
-    paddingHorizontal: 16,
-    paddingTop: 8,
-    borderBottomWidth: 1,
-    borderBottomColor: '#e5e7eb',
-  },
-  tab: {
-    flex: 1,
-    flexDirection: 'row',
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: '#f3e8ff',
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: 12,
-    paddingHorizontal: 8,
-    gap: 6,
-    borderBottomWidth: 3,
-    borderBottomColor: 'transparent',
   },
-  activeTab: {
-    borderBottomColor: '#9D4EDD',
-  },
-  tabText: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#6b7280',
-  },
-  activeTabText: {
-    color: '#9D4EDD',
-  },
-  badge: {
-    backgroundColor: '#f3f4f6',
-    paddingHorizontal: 8,
-    paddingVertical: 2,
-    borderRadius: 10,
-    minWidth: 24,
-    alignItems: 'center',
-  },
-  activeBadge: {
-    backgroundColor: '#f3e8ff',
-  },
-  badgeText: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: '#6b7280',
-  },
-  activeBadgeText: {
-    color: '#9D4EDD',
-  },
-  actionContainer: {
+  actionBar: {
     paddingHorizontal: 16,
-    paddingTop: 16,
+    paddingTop: 12,
+    paddingBottom: 8,
+    backgroundColor: 'white',
   },
-  actionBtn: {
+  actionButton: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     paddingVertical: 14,
-    borderRadius: 10,
+    paddingHorizontal: 20,
+    borderRadius: 12,
     gap: 8,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 3,
-    elevation: 3,
+    shadowOpacity: 0.08,
+    shadowRadius: 4,
+    elevation: 2,
   },
-  dangerBtn: {
+  clearButton: {
     backgroundColor: '#ef4444',
   },
-  btnDisabled: {
-    opacity: 0.5,
+  buttonDisabled: {
+    opacity: 0.4,
   },
-  btnText: {
+  buttonText: {
     color: 'white',
     fontWeight: '600',
-    fontSize: 14,
+    fontSize: 15,
   },
-  infoBanner: {
-    backgroundColor: '#d1fae5',
-    marginHorizontal: 16,
-    marginTop: 12,
-    padding: 12,
-    borderRadius: 8,
+  infoCard: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
+    gap: 12,
+    backgroundColor: '#f3e8ff',
+    marginHorizontal: 16,
+    marginTop: 16,
+    padding: 16,
+    borderRadius: 12,
   },
-  infoBannerBlue: {
-    backgroundColor: '#dbeafe',
-  },
-  infoTextGreen: {
-    fontSize: 12,
-    color: '#065f46',
+  infoCardText: {
     flex: 1,
-  },
-  infoTextBlue: {
-    color: '#1e40af',
+    fontSize: 13,
+    color: '#6b21a8',
+    lineHeight: 18,
   },
   listContent: {
     padding: 16,
+    paddingTop: 20,
   },
   logCard: {
     backgroundColor: 'white',
-    borderRadius: 12,
+    borderRadius: 16,
     padding: 16,
     marginBottom: 12,
-    borderLeftWidth: 4,
-    borderLeftColor: '#9D4EDD',
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.05,
-    shadowRadius: 2,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.06,
+    shadowRadius: 8,
     elevation: 2,
   },
-  logHeader: {
+  cardHeader: {
     flexDirection: 'row',
     alignItems: 'flex-start',
-    marginBottom: 12,
     gap: 12,
+    marginBottom: 12,
   },
-  logBadge: {
+  indexBadge: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
     backgroundColor: '#f3f4f6',
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 6,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  logNumber: {
-    fontSize: 12,
+  indexText: {
+    fontSize: 14,
     fontWeight: '700',
     color: '#6b7280',
   },
-  flex1: {
+  medicationInfo: {
     flex: 1,
   },
   medicationName: {
-    fontSize: 16,
+    fontSize: 17,
     fontWeight: '700',
-    color: '#1f2937',
+    color: '#1a1a1a',
     marginBottom: 4,
   },
-  dosage: {
+  dosageText: {
     fontSize: 14,
     color: '#6b7280',
   },
   actionBadge: {
-    paddingHorizontal: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 12,
     paddingVertical: 6,
-    borderRadius: 8,
+    borderRadius: 20,
+    gap: 4,
   },
   actionText: {
     color: 'white',
-    fontSize: 12,
+    fontSize: 13,
     fontWeight: '700',
-    textTransform: 'uppercase',
+    textTransform: 'capitalize',
   },
-  logFooter: {
+  cardFooter: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
+    flexWrap: 'wrap',
+    gap: 8,
     paddingTop: 12,
     borderTopWidth: 1,
     borderTopColor: '#f3f4f6',
-    flexWrap: 'wrap',
-    gap: 8,
   },
-  infoRow: {
+  infoChip: {
     flexDirection: 'row',
     alignItems: 'center',
+    backgroundColor: '#f9fafb',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 8,
     gap: 6,
   },
-  infoText: {
+  infoChipText: {
     fontSize: 12,
     color: '#6b7280',
-  },
-  notesContainer: {
-    marginTop: 12,
-    padding: 12,
-    backgroundColor: '#f9fafb',
-    borderRadius: 8,
-  },
-  notesLabel: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: '#6b7280',
-    marginBottom: 4,
-  },
-  notesText: {
-    fontSize: 12,
-    color: '#374151',
-  },
-  statusBadge: {
-    marginTop: 8,
-    alignSelf: 'flex-start',
-  },
-  statusText: {
-    fontSize: 11,
-    color: '#6b7280',
-    fontWeight: '600',
+    fontWeight: '500',
   },
   emptyState: {
     alignItems: 'center',
     justifyContent: 'center',
     paddingVertical: 80,
+    paddingHorizontal: 32,
   },
-  emptyText: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: '#6b7280',
-    marginTop: 16,
+  emptyIconContainer: {
+    width: 120,
+    height: 120,
+    borderRadius: 60,
+    backgroundColor: '#f3f4f6',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 20,
+  },
+  emptyTitle: {
+    fontSize: 22,
+    fontWeight: '700',
+    color: '#374151',
     marginBottom: 8,
   },
   emptySubtext: {
-    fontSize: 14,
+    fontSize: 15,
     color: '#9ca3af',
     textAlign: 'center',
-    paddingHorizontal: 40,
+    lineHeight: 22,
   },
 });
