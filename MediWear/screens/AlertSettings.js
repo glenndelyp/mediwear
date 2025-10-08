@@ -13,6 +13,7 @@ import {
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { AntDesign } from '@expo/vector-icons';
 import NotificationService from '../services/NotificationService';
+import BluetoothService from '../services/BluetoothService'; // ADD THIS IMPORT
 import { db, auth } from '../services/firebaseConfig'; 
 import { collection, doc, setDoc, updateDoc, serverTimestamp } from 'firebase/firestore'; 
 
@@ -54,13 +55,13 @@ export default function AlertSettings({ navigation, route }) {
       Alert.alert('Error', 'Medicine data is missing');
       return;
     }
-    if (!user) { // FIXED: Now properly defined
-      Alert.alert('Authentication Error', 'You must be logged in to save medicine.');
-      navigation.navigate('Login'); 
+    
+    if (!user) {
+      Alert.alert('Authentication Error', 'You must be logged in');
+      navigation.navigate('Login');
       return;
     }
 
-    // 1. Finalize the data structure
     const finalMedicineData = {
       ...medicineData,
       alertSettings: {
@@ -71,63 +72,104 @@ export default function AlertSettings({ navigation, route }) {
     };
 
     try {
-      // Check notification permissions first
-      const hasPermission = await NotificationService.registerForPushNotificationsAsync();
-
-      if (hasPermission) {
-        await saveAndSchedule(finalMedicineData);
-      } else {
-        Alert.alert(
-          'Notification Permission Required',
-          'To receive medication reminders, please enable notifications in your device settings.',
-          [
-            {
-              text: 'Continue without notifications',
-              onPress: () => saveOnly(finalMedicineData),
-              style: 'destructive',
-            },
-            { 
-              text: 'Cancel', 
-              style: 'cancel' 
-            }
-          ]
-        );
-      }
+      // Save to Firestore first and get the ID
+      const finalId = await saveToFirestore(finalMedicineData);
+      
+      // Add the ID to the medication data
+      const medicationWithId = { ...finalMedicineData, id: finalId };
+      
+      // Ask user if they want to sync to device
+      Alert.alert(
+        'Sync to MediWear?',
+        'Would you like to sync this medication to your MediWear device now?',
+        [
+          {
+            text: 'Skip',
+            style: 'cancel',
+            onPress: () => finishSetup(medicationWithId, false) // false = no sync attempted
+          },
+          {
+            text: 'Sync Now',
+            onPress: () => syncToDevice(medicationWithId)
+          }
+        ]
+      );
+      
     } catch (error) {
       console.error('Failed to save medicine:', error);
       Alert.alert('Error', 'Failed to save medication. Please try again.');
     }
   };
 
-  const saveAndSchedule = async (data) => {
+  const syncToDevice = async (medicationData) => {
     try {
-      const finalId = await saveToFirestore(data);
-
-      if (data.isEditing) {
-        await NotificationService.cancelMedicineNotifications(data.id);
+      // Check if device is connected
+      const connectionStatus = BluetoothService.getConnectionStatus();
+      
+      if (!connectionStatus.isConnected) {
+        Alert.alert(
+          'No Device Connected',
+          'Please connect to your MediWear device first',
+          [
+            { text: 'OK', onPress: () => finishSetup(medicationData) }
+          ]
+        );
+        return;
       }
       
-      if (data.reminderEnabled && data.reminderTimes?.length > 0) {
-        const scheduledData = {...data, id: finalId}; 
-        await NotificationService.scheduleNextMedicationNotification(scheduledData);
-        console.log(`Scheduled next notification for ${data.name}`);
+      // Show syncing indicator
+      Alert.alert('Syncing...', 'Sending to MediWear device. Please check your watch.');
+      
+      // Send to device and wait for confirmation
+      const response = await BluetoothService.syncMedicationToDevice(medicationData);
+      
+      // Response will have type: 'SYNC_RESPONSE' and success: boolean
+      if (response.success) {
+        Alert.alert(
+          'Confirmed! ✓',
+          response.message || 'Medication confirmed on device',
+          [{ text: 'OK', onPress: () => finishSetup(medicationData) }]
+        );
+      } else {
+        Alert.alert(
+          'Declined',
+          response.message || 'Medication was declined on device. It has been saved to your account but not added to device.',
+          [{ text: 'OK', onPress: () => finishSetup(medicationData) }]
+        );
       }
       
-      showSuccessAlert(data.isEditing);
     } catch (error) {
-      console.error('Failed to save with notifications:', error);
-      Alert.alert('Error', 'Failed to save medication and schedule reminders. Please try again.');
+      console.error('Sync error:', error);
+      
+      // Handle timeout specifically
+      if (error.message === 'Device confirmation timeout') {
+        Alert.alert(
+          'Sync Timeout',
+          'No response from device. Please check your MediWear device. Medication was saved to your account.',
+          [{ text: 'OK', onPress: () => finishSetup(medicationData) }]
+        );
+      } else {
+        Alert.alert(
+          'Sync Failed',
+          'Could not sync to device, but medication was saved to your account.',
+          [{ text: 'OK', onPress: () => finishSetup(medicationData) }]
+        );
+      }
     }
   };
 
-  const saveOnly = async (data) => {
+  const finishSetup = async (medicationData) => {
+    // Schedule notifications if enabled
     try {
-      await saveToFirestore(data); 
-      showSuccessAlert(data.isEditing);
+      if (medicationData.reminderEnabled && medicationData.reminderTimes?.length > 0) {
+        await NotificationService.scheduleNextMedicationNotification(medicationData);
+        console.log(`Scheduled notifications for ${medicationData.name}`);
+      }
     } catch (error) {
-      console.error('Failed to save without notifications:', error);
-      Alert.alert('Error', 'Failed to save medication. Please try again.');
+      console.error('Failed to schedule notifications:', error);
     }
+    
+    showSuccessAlert(medicationData.isEditing);
   };
 
   const saveToFirestore = async (data) => {
@@ -328,21 +370,21 @@ export default function AlertSettings({ navigation, route }) {
   );
 }
 
-// Add your styles here - you'll need to include all the styles used in the component
+// You'll need to add your styles here
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#f8f9fa',
+    backgroundColor: '#F8F9FA',
   },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: 20,
-    paddingVertical: 15,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
     backgroundColor: '#fff',
     borderBottomWidth: 1,
-    borderBottomColor: '#e9ecef',
+    borderBottomColor: '#E5E5E5',
   },
   backButton: {
     padding: 8,
@@ -360,86 +402,86 @@ const styles = StyleSheet.create({
   },
   medicineCard: {
     backgroundColor: '#fff',
-    margin: 20,
+    margin: 16,
     padding: 20,
     borderRadius: 16,
     alignItems: 'center',
     shadowColor: '#000',
-    shadowOffset: {
-      width: 0,
-      height: 2,
-    },
+    shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.1,
-    shadowRadius: 3.84,
-    elevation: 5,
+    shadowRadius: 4,
+    elevation: 3,
   },
   medicineIcon: {
     width: 60,
     height: 60,
     borderRadius: 30,
-    backgroundColor: '#E8D5F2',
-    justifyContent: 'center',
+    backgroundColor: '#F3E8FF',
     alignItems: 'center',
+    justifyContent: 'center',
     marginBottom: 12,
   },
   medicineIconText: {
-    fontSize: 24,
+    fontSize: 30,
   },
   medicineName: {
     fontSize: 20,
-    fontWeight: '600',
+    fontWeight: '700',
     color: '#333',
     marginBottom: 4,
   },
   medicineDosage: {
-    fontSize: 16,
+    fontSize: 14,
     color: '#666',
-    marginBottom: 4,
+    marginBottom: 2,
   },
   medicineFrequency: {
     fontSize: 14,
-    color: '#888',
-    marginBottom: 12,
+    color: '#666',
+    marginBottom: 8,
   },
   timeContainer: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#f8f9fa',
+    marginTop: 8,
     paddingHorizontal: 12,
     paddingVertical: 6,
-    borderRadius: 20,
+    backgroundColor: '#F8F9FA',
+    borderRadius: 8,
   },
   timeIcon: {
+    fontSize: 16,
     marginRight: 6,
   },
   timeText: {
     fontSize: 14,
-    color: '#666',
+    color: '#333',
+    fontWeight: '500',
   },
   section: {
-    margin: 20,
-    marginTop: 0,
+    marginHorizontal: 16,
+    marginBottom: 24,
   },
   sectionTitle: {
-    fontSize: 18,
+    fontSize: 16,
     fontWeight: '600',
     color: '#333',
-    marginBottom: 16,
+    marginBottom: 12,
   },
   optionCard: {
     backgroundColor: '#fff',
-    borderRadius: 12,
     padding: 16,
+    borderRadius: 12,
     marginBottom: 12,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     borderWidth: 2,
-    borderColor: '#e9ecef',
+    borderColor: '#E5E5E5',
   },
   optionCardSelected: {
     borderColor: '#9D4EDD',
-    backgroundColor: '#f8f4fd',
+    backgroundColor: '#F9F5FF',
   },
   optionLeft: {
     flexDirection: 'row',
@@ -447,16 +489,16 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   optionIconContainer: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: '#f8f9fa',
-    justifyContent: 'center',
+    width: 50,
+    height: 50,
+    borderRadius: 25,
+    backgroundColor: '#F8F9FA',
     alignItems: 'center',
+    justifyContent: 'center',
     marginRight: 12,
   },
   optionIcon: {
-    fontSize: 18,
+    fontSize: 24,
   },
   optionContent: {
     flex: 1,
@@ -465,93 +507,93 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '600',
     color: '#333',
-    marginBottom: 4,
+    marginBottom: 2,
   },
   optionSubtitle: {
-    fontSize: 14,
+    fontSize: 13,
     color: '#666',
   },
   recommendedBadge: {
     backgroundColor: '#9D4EDD',
     paddingHorizontal: 8,
     paddingVertical: 2,
-    borderRadius: 12,
-    marginTop: 4,
+    borderRadius: 4,
     alignSelf: 'flex-start',
+    marginTop: 4,
   },
   recommendedText: {
-    fontSize: 12,
     color: '#fff',
-    fontWeight: '500',
+    fontSize: 11,
+    fontWeight: '600',
   },
   checkmark: {
-    width: 24,
-    height: 24,
-    borderRadius: 12,
+    width: 28,
+    height: 28,
+    borderRadius: 14,
     backgroundColor: '#9D4EDD',
-    justifyContent: 'center',
     alignItems: 'center',
+    justifyContent: 'center',
   },
   checkmarkText: {
     color: '#fff',
     fontSize: 16,
-    fontWeight: '600',
+    fontWeight: '700',
   },
   toggleOptionCard: {
     backgroundColor: '#fff',
-    borderRadius: 12,
     padding: 16,
+    borderRadius: 12,
     marginBottom: 12,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     borderWidth: 1,
-    borderColor: '#e9ecef',
+    borderColor: '#E5E5E5',
   },
   toggleOptionCardActive: {
     borderColor: '#9D4EDD',
-    backgroundColor: '#f8f4fd',
+    backgroundColor: '#F9F5FF',
   },
   toggleIconContainer: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: '#f8f9fa',
-    justifyContent: 'center',
+    width: 46,
+    height: 46,
+    borderRadius: 23,
+    backgroundColor: '#F8F9FA',
     alignItems: 'center',
+    justifyContent: 'center',
     marginRight: 12,
   },
   bottomSpacing: {
-    height: 100,
+    height: 20,
   },
   bottomContainer: {
     flexDirection: 'row',
-    padding: 20,
+    padding: 16,
     backgroundColor: '#fff',
     borderTopWidth: 1,
-    borderTopColor: '#e9ecef',
+    borderTopColor: '#E5E5E5',
+    gap: 12,
   },
   backBottomButton: {
     flex: 1,
-    backgroundColor: '#f8f9fa',
+    paddingVertical: 14,
     borderRadius: 12,
-    paddingVertical: 16,
-    marginRight: 12,
+    backgroundColor: '#F8F9FA',
     alignItems: 'center',
-    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: '#E5E5E5',
   },
   backBottomButtonText: {
     fontSize: 16,
     fontWeight: '600',
-    color: '#666',
+    color: '#333',
   },
   completeButton: {
     flex: 2,
-    backgroundColor: '#9D4EDD',
+    paddingVertical: 14,
     borderRadius: 12,
-    paddingVertical: 16,
+    backgroundColor: '#9D4EDD',
     alignItems: 'center',
-    justifyContent: 'center',
   },
   completeButtonText: {
     fontSize: 16,
