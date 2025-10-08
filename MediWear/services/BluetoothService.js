@@ -199,6 +199,12 @@ class BluetoothService {
           type: 'MEDS_DATA', 
           medications: json.medications || [] 
         });
+      } else if (json.cmd === 'SYNC_RESPONSE') {
+        this.notifyListeners({ 
+          type: 'SYNC_RESPONSE', 
+          success: json.success,
+          message: json.message 
+        });
       } else if (json.status === 'success') {
         this.notifyListeners({ 
           type: 'SUCCESS', 
@@ -350,6 +356,69 @@ class BluetoothService {
   // Send ping
   async ping() {
     await this.sendCommand({ cmd: 'PING' });
+  }
+
+  // Sync single medication to device
+  async syncMedicationToDevice(medicineData) {
+    if (!this.isConnected || !this.device) {
+      throw new Error('Not connected to device');
+    }
+    
+    try {
+      // Convert 12-hour format to 24-hour
+      const convertTo24Hour = (timeStr) => {
+        const [time, meridiem] = timeStr.split(' ');
+        const [hours, minutes] = time.split(':');
+        let hour24 = parseInt(hours, 10);
+        
+        if (meridiem === 'PM' && hour24 !== 12) {
+          hour24 += 12;
+        } else if (meridiem === 'AM' && hour24 === 12) {
+          hour24 = 0;
+        }
+        
+        return { hour: hour24, minute: parseInt(minutes, 10) };
+      };
+
+      // Send SYNC_MED command with all medication details
+      const firstTime = convertTo24Hour(medicineData.reminderTimes[0]);
+      
+      await this.sendCommand({
+        cmd: 'SYNC_MED',
+        name: medicineData.name,
+        dosage: medicineData.dosage,
+        hour: firstTime.hour,
+        minute: firstTime.minute,
+        frequency: medicineData.frequency,
+        days: medicineData.days,
+        takeWithFood: medicineData.takeWithFood || false,
+        specialInstructions: medicineData.specialInstructions || '',
+        allTimes: medicineData.reminderTimes
+      });
+      
+      console.log('📤 Sync request sent to device');
+      
+      // Wait for device confirmation (with timeout)
+      return new Promise((resolve, reject) => {
+        const timeout = setTimeout(() => {
+          reject(new Error('Device confirmation timeout'));
+        }, 30000); // 30 second timeout
+        
+        const listener = (data) => {
+          if (data.type === 'SYNC_RESPONSE') {
+            clearTimeout(timeout);
+            this.listeners = this.listeners.filter(cb => cb !== listener);
+            resolve(data);
+          }
+        };
+        
+        this.subscribe(listener);
+      });
+      
+    } catch (error) {
+      console.error('Error syncing medication:', error);
+      throw error;
+    }
   }
 
   // Subscribe to data events
