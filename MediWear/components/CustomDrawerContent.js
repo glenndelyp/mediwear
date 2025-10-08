@@ -15,7 +15,6 @@ export function CustomDrawerContent(props) {
   useEffect(() => {
     loadUserData();
     
-    // Add focus listener to reload data when drawer opens
     const unsubscribe = navigation.addListener('focus', () => {
       loadUserData();
     });
@@ -40,11 +39,7 @@ export function CustomDrawerContent(props) {
 
   const handleLogout = async () => {
     try {
-      // Optional: Clear user data on logout
-      // await AsyncStorage.removeItem('userData');
-      // await AsyncStorage.removeItem('profileImage');
-      
-      // Navigate to Login screen and clear navigation stack
+
       navigation.reset({
         index: 0,
         routes: [{ name: 'Login' }],
@@ -69,9 +64,10 @@ export function CustomDrawerContent(props) {
     { label: 'All Logs', screen: 'DevLogs', icon: 'stats-chart-outline' },
     { label: 'My History', screen: 'HistoryLog', icon: 'time-outline' },
     { label: 'My Profile', screen: 'Profile', icon: 'person-outline' },
+    { label: 'My Inventory', screen: 'Inventory', icon: 'person-outline' },
+
   ];
 
-  // Get the current route name to properly highlight active item
   const getCurrentRouteIndex = () => {
     const currentRoute = props.state.routes[props.state.index];
     return menuItems.findIndex(item => item.screen === currentRoute.name);
@@ -81,7 +77,6 @@ export function CustomDrawerContent(props) {
 
   return (
     <SafeAreaView style={styles.container}>
-      {/* Drawer Header with Profile Info */}
       <TouchableOpacity 
         style={styles.header}
         onPress={() => navigation.navigate('Profile')}
@@ -94,7 +89,6 @@ export function CustomDrawerContent(props) {
         <Text style={styles.userEmail}>{userData.email}</Text>
       </TouchableOpacity>
 
-      {/* Main Navigation Items */}
       <DrawerContentScrollView {...props} contentContainerStyle={styles.drawerContent}>
         {menuItems.map((item, index) => (
           <TouchableOpacity
@@ -124,7 +118,6 @@ export function CustomDrawerContent(props) {
         ))}
       </DrawerContentScrollView>
 
-      {/* Logout Footer */}
       <View style={styles.footer}>
         <TouchableOpacity 
           style={styles.logoutButton} 
