@@ -22,7 +22,9 @@ import {
     where, 
     onSnapshot, 
     doc, 
-    deleteDoc 
+    deleteDoc,
+    updateDoc,
+    getDoc
 } from 'firebase/firestore';
 
 export default function MedicineList({ navigation }) {
@@ -372,6 +374,55 @@ export default function MedicineList({ navigation }) {
         });
     };
 
+    // NEW FUNCTION: Decrease inventory quantity
+    const decreaseInventoryQuantity = async (medicineId, medicineName) => {
+        try {
+            const medRef = doc(db, "medications", medicineId);
+            const medDoc = await getDoc(medRef);
+            
+            if (medDoc.exists()) {
+                const currentData = medDoc.data();
+                const currentQty = currentData.currentQuantity || 0;
+                
+                if (currentQty > 0) {
+                    const newQty = currentQty - 1;
+                    await updateDoc(medRef, {
+                        currentQuantity: newQty
+                    });
+                    
+                    console.log(`Inventory decreased for ${medicineName}: ${currentQty} -> ${newQty}`);
+                    
+                    // Log the inventory decrease
+                    await LoggingService.addLog(
+                        'inventory',
+                        `Inventory decreased for ${medicineName}`,
+                        `Quantity: ${currentQty} -> ${newQty} pills`
+                    );
+                    
+                    // Check if refill is needed
+                    const refillReminder = currentData.refillReminder || 3;
+                    if (newQty <= refillReminder) {
+                        await LoggingService.addLog(
+                            'inventory',
+                            `Refill reminder triggered for ${medicineName}`,
+                            `Current quantity: ${newQty} pills (Reminder set at: ${refillReminder})`
+                        );
+                    }
+                } else {
+                    console.log(`No inventory to decrease for ${medicineName}`);
+                    Alert.alert(
+                        'Low Inventory',
+                        `${medicineName} has no pills left in inventory. Please refill.`,
+                        [{ text: 'OK' }]
+                    );
+                }
+            }
+        } catch (error) {
+            console.error('Failed to decrease inventory:', error);
+            // Don't show error alert to user, just log it
+        }
+    };
+
     const handleTaken = async (medicineId) => {
         const dateKey = getCurrentDateKey();
         const statusKey = `${STATUS_STORAGE_KEY}${medicineId}_${dateKey}`;
@@ -383,11 +434,12 @@ export default function MedicineList({ navigation }) {
                 return;
             }
 
-            await AsyncStorage.setItem(statusKey, 'taken');
-
             const medicine = medicines.find(med => med.id === medicineId);
             const medicineName = medicine ? medicine.name : 'Unknown';
             const medicineDosage = medicine ? medicine.dosage : 'N/A';
+
+            // Update status in AsyncStorage
+            await AsyncStorage.setItem(statusKey, 'taken');
 
             // Log to LoggingService
             await LoggingService.addLog(
@@ -396,6 +448,9 @@ export default function MedicineList({ navigation }) {
                 `Dosage: ${medicineDosage}, Time: ${new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}, Status: ${currentStatus === 'missed' ? 'late (was missed)' : 'on-time'}`
             );
 
+            // Decrease inventory quantity
+            await decreaseInventoryQuantity(medicineId, medicineName);
+
             await updateDailyProgress(medicineId, 'taken', medicineName);
 
             setMedicineStatus(prevStatus => ({
@@ -403,7 +458,7 @@ export default function MedicineList({ navigation }) {
                 [medicineId]: 'taken',
             }));
 
-            Alert.alert('Success', 'Medicine marked as taken!');
+            Alert.alert('Success', 'Medicine marked as taken! Inventory updated.');
         } catch (error) {
             console.error('Failed to update medicine status:', error);
             Alert.alert('Error', 'Failed to update status.');
@@ -461,6 +516,7 @@ export default function MedicineList({ navigation }) {
         const statusInfo = getStatusText(medicineStatus[item.id] || 'pending');
         const itemName = item.name || '';
         const itemDosage = item.dosage || '';
+        const currentQty = item.currentQuantity || 0;
 
         return (
             <View key={item.id} style={styles.medicineCard}>
@@ -475,6 +531,15 @@ export default function MedicineList({ navigation }) {
                         <Text style={styles.nextDose}>
                             Next Dose: {getNextReminderTime(item)}
                         </Text>
+                        {/* Show inventory quantity */}
+                        {currentQty !== undefined && (
+                            <Text style={[
+                                styles.inventoryText,
+                                currentQty <= (item.refillReminder || 3) && styles.inventoryLow
+                            ]}>
+                                Inventory: {currentQty} pill{currentQty !== 1 ? 's' : ''} left
+                            </Text>
+                        )}
                         {item.reminderDates && item.reminderDates[0] && (
                             <Text style={styles.startDate}>
                                 Started: {formatDateForDisplay(item.reminderDates[0])}
@@ -668,6 +733,15 @@ const styles = StyleSheet.create({
         fontSize: 14,
         color: '#666',
         marginBottom: 2,
+    },
+    inventoryText: {
+        fontSize: 14,
+        color: '#28a745',
+        fontWeight: '600',
+        marginTop: 4,
+    },
+    inventoryLow: {
+        color: '#dc3545',
     },
     startDate: {
         fontSize: 14,
