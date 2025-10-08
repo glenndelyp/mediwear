@@ -21,6 +21,10 @@ export default function AddMedicine({ navigation, route }) {
   const [currentDateIndex, setCurrentDateIndex] = useState(0);
   const user = auth.currentUser;
 
+  // NEW: Pill quantity state (max 7 pills for watch device)
+  const [pillQuantity, setPillQuantity] = useState(editingMedicine?.pillQuantity?.toString() || '');
+  const [refillReminder, setRefillReminder] = useState(editingMedicine?.refillReminder || 5);
+
   const getCurrentDate = () => {
     return new Date();
   };
@@ -92,7 +96,6 @@ export default function AddMedicine({ navigation, route }) {
   const [takeWithFood, setTakeWithFood] = useState(editingMedicine?.takeWithFood || false);
   const [specialInstructions, setSpecialInstructions] = useState(editingMedicine?.specialInstructions || '');
   
-  // Updated state for DateTimePicker
   const [reminderTimes, setReminderTimes] = useState(() => {
     if (timeObjects.length > 0) {
       return timeObjects;
@@ -192,12 +195,10 @@ export default function AddMedicine({ navigation, route }) {
     return time;
   };
 
-  // Enhanced validation function with proper error handling
   const validateDateTime = (date, time) => {
     try {
       if (!date || !time) return false;
       
-      // Ensure both are valid Date objects
       const validDate = date instanceof Date ? date : new Date(date);
       const validTime = time instanceof Date ? time : new Date(time);
       
@@ -362,7 +363,7 @@ export default function AddMedicine({ navigation, route }) {
       
       const now = new Date();
       if (currentDate.toDateString() === now.toDateString()) {
-        const futureTime = new Date(now.getTime() + 60 * 60 * 1000); // Add 1 hour
+        const futureTime = new Date(now.getTime() + 60 * 60 * 1000);
         newTime.setHours(futureTime.getHours(), futureTime.getMinutes(), 0, 0);
       }
       
@@ -380,6 +381,29 @@ export default function AddMedicine({ navigation, route }) {
     }
   };
 
+const handlePillQuantityChange = (value) => {
+  const numValue = value.replace(/[^0-9]/g, '');
+  if (numValue === '' || (parseInt(numValue) >= 0 && parseInt(numValue) <= 7)) {
+    setPillQuantity(numValue);
+  }
+};
+
+const incrementPillQuantity = () => {
+  const current = parseInt(pillQuantity) || 0;
+  if (current < 7) {
+    setPillQuantity((current + 1).toString());
+  }
+};
+
+const decrementPillQuantity = () => {
+  const current = parseInt(pillQuantity) || 0;
+  if (current > 0) {
+    setPillQuantity((current - 1).toString());
+  }
+};
+
+
+
   const handleSaveDraft = () => {
     if (!selectedMedicine.trim()) {
       Alert.alert('Oh no..', 'Please enter medication name');
@@ -388,13 +412,18 @@ export default function AddMedicine({ navigation, route }) {
     Alert.alert('Success', 'Medication saved as draft');
   };
 
-  // FIXED: This function now properly prepares data and navigates to AlertSettings
   const handleAddMedication = async () => {
     try {
-      // Basic validation
+      // Validation
       if (!selectedMedicine.trim() || !selectedDosage.trim()) {
         Alert.alert('Oh no..', 'Please fill in required fields');
         return;
+      }
+
+      // NEW: Validate pill quantity
+       if (!pillQuantity || parseInt(pillQuantity) <= 0 || parseInt(pillQuantity) > 7) {
+         Alert.alert('Oh no..', 'Please enter the number of pills you will put in the device (1–7)');
+         return;
       }
 
       if (!user) {
@@ -403,7 +432,6 @@ export default function AddMedicine({ navigation, route }) {
         return;
       }
 
-      // Validate date/time only if reminders are set
       if (reminderTimes.length > 0 && reminderDatesList.length > 0) {
         for (let i = 0; i < reminderTimes.length; i++) {
           if (reminderDatesList[i] && reminderTimes[i]) {
@@ -415,18 +443,11 @@ export default function AddMedicine({ navigation, route }) {
         }
       }
 
-      // Format reminder times for storage and display
       const formattedReminderTimes = reminderTimes.map(time => formatTime12Hour(time));
 
-      // Prepare medicine data to pass to AlertSettings
       const medicineData = {
-        // Include ID if editing
         ...(isEditing && { id: editingMedicine.id }),
-        
-        // User info
         userId: user.uid,
-        
-        // Medicine details
         name: selectedMedicine,
         dosage: selectedDosage,
         frequency: frequency,
@@ -437,12 +458,15 @@ export default function AddMedicine({ navigation, route }) {
         takeWithFood: takeWithFood,
         specialInstructions: specialInstructions,
         
-        // Metadata
+        // NEW: Inventory fields
+        pillQuantity: parseInt(pillQuantity),
+        currentQuantity: isEditing ? editingMedicine.currentQuantity : parseInt(pillQuantity),
+        refillReminder: refillReminder,
+        
         isEditing: isEditing,
         updatedAt: serverTimestamp(),
       };
 
-      // If we're editing directly (not from AlertSettings), save immediately
       if (isEditing && !fromAlertSettings) {
         const medicineRef = doc(db, "medications", editingMedicine.id);
         await updateDoc(medicineRef, medicineData);
@@ -452,7 +476,6 @@ export default function AddMedicine({ navigation, route }) {
         return;
       }
 
-      // Navigate to AlertSettings with the medicine data
       navigation.navigate('AlertSettings', { medicineData });
 
     } catch (error) {
@@ -465,7 +488,6 @@ export default function AddMedicine({ navigation, route }) {
     navigation.navigate('Home');
   };
 
-  // Helper function to get header title
   const getHeaderTitle = () => {
     if (isEditing) return 'Edit Medicine';
     if (fromAlertSettings) return 'Add Medicine';
@@ -556,6 +578,42 @@ export default function AddMedicine({ navigation, route }) {
             />
           </View>
         </View>
+
+        {/* NEW: Pill Inventory Section */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Pill Container (Watch Device)</Text>
+          <Text style={styles.sectionSubtitle}>
+            How many pills will you put in the device container?
+          </Text>
+          
+          <View style={styles.quantityContainer}>
+            <Text style={styles.quantityLabel}>Quantity:</Text>
+            <View style={styles.quantityControls}>
+              <TouchableOpacity 
+                style={styles.quantityButton} 
+                onPress={decrementPillQuantity}
+              >
+                <Text style={styles.quantityButtonText}>−</Text>
+              </TouchableOpacity>
+              
+              <TextInput
+                style={styles.quantityInput}
+                value={pillQuantity}
+                onChangeText={handlePillQuantityChange}
+                keyboardType="numeric"
+                placeholder="0"
+                maxLength={3}
+              />
+              
+              <TouchableOpacity 
+                style={styles.quantityButton} 
+                onPress={incrementPillQuantity}
+              >
+                <Text style={styles.quantityButtonText}>+</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
         
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Time & Date Schedule</Text>
@@ -565,7 +623,6 @@ export default function AddMedicine({ navigation, route }) {
                 <View key={index} style={styles.timeRow}>
                   <Text style={styles.timeLabel}>Reminder {index + 1}:</Text>
                   
-                  {/* Time Picker Button */}
                   <TouchableOpacity
                     style={styles.dateTimeButton}
                     onPress={() => showTimePickerForIndex(index)}
@@ -576,7 +633,6 @@ export default function AddMedicine({ navigation, route }) {
                     </Text>
                   </TouchableOpacity>
                   
-                  {/* Date Picker Button */}
                   <TouchableOpacity
                     style={styles.dateTimeButton}
                     onPress={() => showDatePickerForIndex(index)}
@@ -678,20 +734,18 @@ export default function AddMedicine({ navigation, route }) {
             textAlignVertical="top"
           />
         </View>
-
+         
         <View style={styles.actionButtons}>
           <TouchableOpacity style={styles.draftButton} onPress={handleSaveDraft}>
             <Text style={styles.draftButtonText}>Save as Draft</Text>
           </TouchableOpacity>
           <TouchableOpacity style={styles.addButton} onPress={handleAddMedication}>
-            <Text style={styles.addButtonText}> Next
-            </Text>
+            <Text style={styles.addButtonText}>Next</Text>
           </TouchableOpacity>
         </View>
 
         <View style={styles.bottomSpacing} />
 
-        {/* DateTimePicker Components */}
         {showTimePicker && (
           <DateTimePicker
             value={reminderTimes[currentTimeIndex] || new Date()}
@@ -719,7 +773,7 @@ export default function AddMedicine({ navigation, route }) {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#fff',
+    backgroundColor: '#f8f9fa',
   },
   scrollView: {
     flex: 1,
@@ -727,43 +781,52 @@ const styles = StyleSheet.create({
   header: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 20,
-    paddingVertical: 15,
+    padding: 16,
+    backgroundColor: '#fff',
     borderBottomWidth: 1,
     borderBottomColor: '#e0e0e0',
   },
   backButton: {
-    marginRight: 15,
+    padding: 8,
+    marginRight: 12,
   },
   headerTitle: {
-    fontSize: 18,
-    fontWeight: '600',
+    fontSize: 20,
+    fontWeight: 'bold',
     color: '#333',
   },
   section: {
-    paddingHorizontal: 20,
-    paddingVertical: 15,
+    backgroundColor: '#fff',
+    marginTop: 12,
+    padding: 16,
+    borderRadius: 12,
+    marginHorizontal: 16,
   },
   sectionHead: {
     fontSize: 18,
-    fontWeight: '600',
+    fontWeight: 'bold',
     color: '#333',
-    marginBottom: 15,
+    marginBottom: 16,
   },
   sectionTitle: {
-    fontSize: 16,
-    fontWeight: '600',
+    fontSize: 18,
+    fontWeight: 'bold',
     color: '#333',
-    marginBottom: 15,
+    marginBottom: 8,
+  },
+  sectionSubtitle: {
+    fontSize: 14,
+    color: '#666',
+    marginBottom: 16,
   },
   dropdownContainer: {
-    gap: 15,
+    gap: 12,
   },
   label: {
     fontSize: 14,
-    fontWeight: '500',
-    color: '#666',
-    marginBottom: 5,
+    fontWeight: '600',
+    color: '#333',
+    marginBottom: 4,
   },
   dropdown: {
     height: 50,
@@ -784,138 +847,188 @@ const styles = StyleSheet.create({
   inputSearchStyle: {
     height: 40,
     fontSize: 14,
-    color: '#333',
   },
   iconStyle: {
     width: 20,
     height: 20,
   },
+  // NEW: Inventory styles
+  quantityContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 16,
+    paddingVertical: 8,
+  },
+  quantityLabel: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#333',
+  },
+  quantityControls: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  quantityButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: '#E8D5F2',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  quantityButtonText: {
+    fontSize: 24,
+    fontWeight: 'bold',
+    color: '#9D4EDD',
+  },
+  quantityInput: {
+    width: 80,
+    height: 45,
+    borderWidth: 2,
+    borderColor: '#9D4EDD',
+    borderRadius: 8,
+    textAlign: 'center',
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: '#333',
+  },
+  
+  infoBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: '#F0F0F0',
+    padding: 12,
+    borderRadius: 8,
+  },
+  infoText: {
+    flex: 1,
+    fontSize: 12,
+    color: '#666',
+  },
   timeScheduleContainer: {
     gap: 12,
   },
   timeRow: {
-    backgroundColor: '#f8f9fa',
-    padding: 15,
-    borderRadius: 10,
-    gap: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingVertical: 8,
   },
   timeLabel: {
     fontSize: 14,
     fontWeight: '600',
     color: '#333',
-    marginBottom: 8,
+    width: 90,
   },
   dateTimeButton: {
+    flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#fff',
+    gap: 6,
+    padding: 10,
+    backgroundColor: '#f5f5f5',
+    borderRadius: 8,
     borderWidth: 1,
     borderColor: '#ddd',
-    borderRadius: 8,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    gap: 8,
   },
   dateTimeButtonText: {
-    fontSize: 14,
+    fontSize: 12,
     color: '#333',
     flex: 1,
   },
   removeTimeButton: {
-    position: 'absolute',
-    top: 10,
-    right: 10,
-    width: 24,
-    height: 24,
-    backgroundColor: '#ff4444',
-    borderRadius: 12,
-    alignItems: 'center',
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: '#FFE5E5',
     justifyContent: 'center',
+    alignItems: 'center',
   },
   removeTimeText: {
-    color: '#fff',
-    fontSize: 14,
+    fontSize: 18,
+    color: '#FF4444',
     fontWeight: 'bold',
   },
   addTimeButton: {
-    backgroundColor: '#9D4EDD',
-    paddingVertical: 12,
+    padding: 12,
+    backgroundColor: '#E8D5F2',
     borderRadius: 8,
     alignItems: 'center',
-    marginTop: 10,
+    marginTop: 8,
   },
   addTimeText: {
-    color: '#fff',
     fontSize: 14,
     fontWeight: '600',
+    color: '#9D4EDD',
   },
   scheduleBox: {
-    backgroundColor: '#f8f9fa',
-    padding: 20,
-    borderRadius: 10,
+    padding: 16,
+    backgroundColor: '#f5f5f5',
+    borderRadius: 8,
     alignItems: 'center',
   },
   scheduleText: {
     fontSize: 14,
     color: '#666',
-    textAlign: 'center',
   },
   switchRow: {
     flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'space-between',
     paddingVertical: 12,
     borderBottomWidth: 1,
     borderBottomColor: '#f0f0f0',
   },
   switchLeft: {
     flex: 1,
-    marginRight: 15,
   },
   switchTitle: {
     fontSize: 16,
-    fontWeight: '500',
+    fontWeight: '600',
     color: '#333',
-    marginBottom: 2,
+    marginBottom: 4,
   },
   switchSubtitle: {
     fontSize: 12,
     color: '#666',
   },
   textArea: {
+    height: 100,
     borderWidth: 1,
     borderColor: '#ddd',
     borderRadius: 8,
     padding: 12,
     fontSize: 14,
     color: '#333',
-    minHeight: 100,
-    backgroundColor: '#fff',
   },
   actionButtons: {
     flexDirection: 'row',
-    paddingHorizontal: 20,
-    paddingVertical: 20,
     gap: 12,
+    paddingHorizontal: 16,
+    marginTop: 20,
   },
   draftButton: {
     flex: 1,
-    backgroundColor: '#f8f9fa',
-    paddingVertical: 15,
-    borderRadius: 10,
+    padding: 16,
+    backgroundColor: '#fff',
+    borderRadius: 12,
     alignItems: 'center',
     borderWidth: 1,
-    borderColor: '#ddd',
+    borderColor: '#9D4EDD',
   },
   draftButtonText: {
     fontSize: 16,
     fontWeight: '600',
-    color: '#666',
+    color: '#9D4EDD',
   },
   addButton: {
     flex: 1,
+    padding: 16,
     backgroundColor: '#9D4EDD',
-    paddingVertical: 15,
-    borderRadius: 10,
+    borderRadius: 12,
     alignItems: 'center',
   },
   addButtonText: {
@@ -924,6 +1037,6 @@ const styles = StyleSheet.create({
     color: '#fff',
   },
   bottomSpacing: {
-    height: 20,
+    height: 40,
   },
 });
