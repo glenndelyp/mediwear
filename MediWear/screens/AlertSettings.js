@@ -8,7 +8,9 @@ import {
   SafeAreaView,
   Alert,
   Switch,
+  Platform,
 } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { AntDesign } from '@expo/vector-icons';
 import NotificationService from '../services/NotificationService';
 import { db, auth } from '../services/firebaseConfig'; 
@@ -18,7 +20,7 @@ export default function AlertSettings({ navigation, route }) {
   const medicineData = route?.params?.medicineData;
   const user = auth.currentUser; 
   
-  const [alertType, setAlertType] = useState('both');
+  const [alertType, setAlertType] = useState('both'); 
   const [earlyReminder, setEarlyReminder] = useState(false);
   const [waitOption, setWaitOption] = useState(false);
 
@@ -47,31 +49,18 @@ export default function AlertSettings({ navigation, route }) {
     },
   ];
 
-  // ADD THIS FUNCTION
-  const showSuccessAlert = (isEditing) => {
-    Alert.alert(
-      'Success',
-      isEditing ? 'Medication updated successfully!' : 'Medication added successfully!',
-      [
-        {
-          text: 'OK',
-          onPress: () => navigation.navigate('Home')
-        }
-      ]
-    );
-  };
-
   const handleCompleteSetup = async () => {
     if (!medicineData) {
       Alert.alert('Error', 'Medicine data is missing');
       return;
     }
-    if (!user) { 
+    if (!user) { // FIXED: Now properly defined
       Alert.alert('Authentication Error', 'You must be logged in to save medicine.');
       navigation.navigate('Login'); 
       return;
     }
 
+    // 1. Finalize the data structure
     const finalMedicineData = {
       ...medicineData,
       alertSettings: {
@@ -82,29 +71,31 @@ export default function AlertSettings({ navigation, route }) {
     };
 
     try {
-      // SAVE FIRST, then try to schedule notifications
-      await saveOnly(finalMedicineData);
-      
-      // Try to schedule notifications after successful save
-      try {
-        const hasPermission = await NotificationService.registerForPushNotificationsAsync();
-        if (hasPermission && finalMedicineData.reminderEnabled) {
-          const savedId = finalMedicineData.id || finalMedicineData.medicineId;
-          if (savedId) {
-            await NotificationService.scheduleNextMedicationNotification({
-              ...finalMedicineData,
-              id: savedId
-            });
-          }
-        }
-      } catch (notifError) {
-        console.log('Could not schedule notifications:', notifError.message);
-        // Don't show error to user since medicine was saved successfully
+      // Check notification permissions first
+      const hasPermission = await NotificationService.registerForPushNotificationsAsync();
+
+      if (hasPermission) {
+        await saveAndSchedule(finalMedicineData);
+      } else {
+        Alert.alert(
+          'Notification Permission Required',
+          'To receive medication reminders, please enable notifications in your device settings.',
+          [
+            {
+              text: 'Continue without notifications',
+              onPress: () => saveOnly(finalMedicineData),
+              style: 'destructive',
+            },
+            { 
+              text: 'Cancel', 
+              style: 'cancel' 
+            }
+          ]
+        );
       }
-      
     } catch (error) {
       console.error('Failed to save medicine:', error);
-      Alert.alert('Error', `Failed to save medication: ${error.message}`);
+      Alert.alert('Error', 'Failed to save medication. Please try again.');
     }
   };
 
@@ -140,75 +131,52 @@ export default function AlertSettings({ navigation, route }) {
   };
 
   const saveToFirestore = async (data) => {
-    console.log('=== START saveToFirestore ===');
-    console.log('Received data:', JSON.stringify(data, null, 2));
-    
-    try {
-      if (!user) {
-        throw new Error("User not logged in.");
-      }
+    if (!user) {
+      throw new Error("User not logged in.");
+    }
 
-      console.log('User ID:', user.uid);
+    const { alertSettings, isEditing, id, ...medData } = data;
 
-      const { isEditing, id, ...restData } = data;
+    const firestoreData = {
+      userId: user.uid,
+      ...medData,
+      alertSettings,
+      reminderEnabled: medData.reminderEnabled, 
+      updatedAt: serverTimestamp(),
+    };
 
-      // Create the complete Firestore data object
-      const firestoreData = {
-        userId: user.uid,
-        name: restData.name,
-        dosage: restData.dosage,
-        frequency: restData.frequency,
-        days: restData.days,
-        reminderTimes: restData.reminderTimes || [],
-        reminderDates: restData.reminderDates || [],
-        reminderEnabled: restData.reminderEnabled !== undefined ? restData.reminderEnabled : true,
-        takeWithFood: restData.takeWithFood || false,
-        specialInstructions: restData.specialInstructions || '',
-        alertSettings: restData.alertSettings || {
-          alertType: 'both',
-          earlyReminder: false,
-          waitOption: false,
-        },
-        updatedAt: serverTimestamp(),
-      };
-
-      console.log('Prepared Firestore data:', JSON.stringify(firestoreData, null, 2));
-      console.log('Is Editing?', isEditing, 'ID:', id);
-
-      if (isEditing && id) {
-        console.log('Updating existing document:', id);
-        const medicineRef = doc(db, "medications", id);
-        await updateDoc(medicineRef, firestoreData);
-        console.log("✅ Medication updated successfully:", id);
-        return id;
-      } else {
-        console.log('Creating new document');
-        const newMedRef = doc(collection(db, "medications"));
-        console.log('New document ID:', newMedRef.id);
-        
-        const newDocData = {
-          ...firestoreData,
-          createdAt: serverTimestamp(),
-          id: newMedRef.id,
-        };
-        
-        console.log('About to save new document...');
-        await setDoc(newMedRef, newDocData);
-        console.log("✅ New medication added successfully:", newMedRef.id);
-        return newMedRef.id;
-      }
-    } catch (error) {
-      console.error('=== ERROR in saveToFirestore ===');
-      console.error('Error name:', error.name);
-      console.error('Error message:', error.message);
-      console.error('Error code:', error.code);
-      console.error('Full error object:', JSON.stringify(error, null, 2));
-      console.error('Error stack:', error.stack);
-      throw error;
+    if (isEditing && id) {
+      const medicineRef = doc(db, "medications", id);
+      await updateDoc(medicineRef, firestoreData);
+      console.log("Medication updated in Firestore:", id);
+      return id;
+    } else {
+      const newMedRef = doc(collection(db, "medications"));
+      await setDoc(newMedRef, {
+        ...firestoreData,
+        createdAt: serverTimestamp(),
+        id: newMedRef.id 
+      });
+      console.log("New medication added to Firestore:", newMedRef.id);
+      return newMedRef.id;
     }
   };
 
+  const showSuccessAlert = (isEditing) => {
+    Alert.alert(
+      'Success!', 
+      `Medication ${isEditing ? 'updated' : 'added'} successfully!`,
+      [
+        {
+          text: 'OK',
+          onPress: () => navigation.navigate('Home'),
+        },
+      ]
+    );
+  };
+
   const handleBack = () => {
+    // Pass the medicine data back to AddMedicine screen
     navigation.navigate('AddMedicine', { 
       medicine: medicineData,
       fromAlertSettings: true 
@@ -360,6 +328,7 @@ export default function AlertSettings({ navigation, route }) {
   );
 }
 
+// Add your styles here - you'll need to include all the styles used in the component
 const styles = StyleSheet.create({
   container: {
     flex: 1,
