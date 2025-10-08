@@ -3,7 +3,7 @@ import './services/firebaseConfig';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { createDrawerNavigator } from '@react-navigation/drawer';
-import 'react-native-gesture-handler'; 
+import 'react-native-gesture-handler';
 import Login from './sign-login/login';
 import SignUp from './sign-login/signup';
 import Home from './screens/home';
@@ -17,24 +17,28 @@ import Profile from './screens/profile';
 import HistoryLog from './screens/HistoryLog';
 import DevLogs from './screens/Logs';
 import LogScreen from './screens/LogScreen';
+import Inventory from './screens/Pill_Inventory';
 import {CustomDrawerContent} from './components/CustomDrawerContent';
 import NotificationService from './services/NotificationService';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { Ionicons } from "@expo/vector-icons";
 
 
+
+
 const Stack = createNativeStackNavigator();
 const Drawer = createDrawerNavigator();
 const Tab = createBottomTabNavigator();
+
 
 function MyTabs() {
   return (
     <Tab.Navigator
       screenOptions={({ route }) => ({
-        headerShown: false, 
+        headerShown: false,
         tabBarIcon: ({ focused, color, size }) => {
           let iconName = 'help-outline'; // fallback
-          
+         
           if (route.name === 'Home') {
             iconName = focused ? 'home' : 'home-outline';
           } else if (route.name === 'MedList') {
@@ -44,7 +48,7 @@ function MyTabs() {
           } else if (route.name === 'Stats') {
             iconName = focused ? 'bar-chart' : 'bar-chart-outline';
           }
-          
+         
           return <Ionicons name={iconName} size={size} color={color} />;
         },
         tabBarActiveTintColor: '#9D4EDD',
@@ -59,23 +63,23 @@ function MyTabs() {
         },
       })}
     >
-      <Tab.Screen 
-        name="Home" 
+      <Tab.Screen
+        name="Home"
         component={Home}
         options={{ tabBarLabel: 'Home' }}
       />
-      <Tab.Screen 
-        name="MedList" 
+      <Tab.Screen
+        name="MedList"
         component={MedicineList}
         options={{ tabBarLabel: 'Medications' }}
       />
-      <Tab.Screen 
-        name="Device" 
+      <Tab.Screen
+        name="Device"
         component={Device}
         options={{ tabBarLabel: 'Device' }}
       />
-      <Tab.Screen 
-        name="Stats" 
+      <Tab.Screen
+        name="Stats"
         component={Stats}
         options={{ tabBarLabel: 'Stats' }}
       />
@@ -83,23 +87,26 @@ function MyTabs() {
   );
 }
 
+
 function MyDrawer() {
   return (
-    <Drawer.Navigator 
-      drawerContent={(props) => <CustomDrawerContent {...props} />} 
+    <Drawer.Navigator
+      drawerContent={(props) => <CustomDrawerContent {...props} />}
       screenOptions={{headerShown: false}}
     >
       <Drawer.Screen name="HomeDrawer" component={MyTabs} />
       <Drawer.Screen name="LogScreen" component={LogScreen} />
       <Drawer.Screen name="DevLogs" component={DevLogs} />
       <Drawer.Screen name="History" component={HistoryLog} />
+      <Drawer.Screen name="Inventory" component={Inventory} />
       <Drawer.Screen name="Profile" component={Profile} />
     </Drawer.Navigator>
   );
 }
 
+
 export default function App() {
-  
+ 
   return (
     <NavigationContainer>
       <Stack.Navigator
@@ -122,6 +129,7 @@ export default function App() {
           options={{ headerShown: false }}
         />
 
+
         <Stack.Screen
           name="MedList"
           component={MedicineList}
@@ -134,7 +142,7 @@ export default function App() {
           name="Device"
           component={Device}
           options={{
-            headerShown: true, 
+            headerShown: true,
             title: 'Device Settings',
           }}
         />
@@ -158,7 +166,7 @@ export default function App() {
           name="MedicineDetails"
           component={MedicineDetails}
           options={{
-            headerShown: false, 
+            headerShown: false,
             title: 'Details',
           }}
         />
@@ -166,7 +174,7 @@ export default function App() {
           name="Stats"
           component={Stats}
           options={{
-            headerShown: true, 
+            headerShown: true,
             title: 'Status',
           }}
         />
@@ -174,28 +182,35 @@ export default function App() {
           name="Profile"
           component={Profile}
           options={{
-            headerShown: false, 
+            headerShown: false,
           }}
         />
         <Stack.Screen
           name="HistoryLog"
           component={HistoryLog}
           options={{
-            headerShown: true, 
+            headerShown: true,
           }}
         />
          <Stack.Screen
           name="DevLogs"
           component={DevLogs}
           options={{
-            headerShown: true, 
+            headerShown: true,
           }}
         />
           <Stack.Screen
           name="LogScreen"
           component={LogScreen}
           options={{
-            headerShown: false, 
+            headerShown: false,
+          }}
+        />
+         <Stack.Screen
+          name="Inventory"
+          component={Inventory}
+          options={{
+            headerShown: false,
           }}
         />
 
@@ -203,6 +218,7 @@ export default function App() {
     </NavigationContainer>
   );
 }
+
 
 const styles = StyleSheet.create({
   headerOptions: {
