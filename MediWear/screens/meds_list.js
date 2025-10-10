@@ -10,7 +10,7 @@ import {
     Platform,
 } from "react-native";
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { AntDesign } from "@expo/vector-icons";
+import { MaterialIcons, Ionicons } from "@expo/vector-icons";
 import LoggingService from '../services/LoggingService';
 
 import { getAuth, onAuthStateChanged } from "firebase/auth";
@@ -34,19 +34,15 @@ export default function MedicineList({ navigation }) {
     const [isLoading, setIsLoading] = useState(true);
     const [user, setUser] = useState(null);
 
-    // Key to store the status with date
     const STATUS_STORAGE_KEY = 'medicine_status_';
     const DAILY_STATUS_KEY = 'daily_status_';
-
     const auth = getAuth();
 
-    // Get current date in YYYY-MM-DD format
     const getCurrentDateKey = () => {
         const today = new Date();
         return today.toISOString().split('T')[0];
     };
 
-    // Get formatted display date
     const getFormattedDate = () => {
         const today = new Date();
         const options = {
@@ -58,17 +54,30 @@ export default function MedicineList({ navigation }) {
         return today.toLocaleDateString('en-US', options);
     };
 
-    const formatDateForDisplay = (isoDateString) => {
-        if (!isoDateString) return "N/A";
-        const date = new Date(isoDateString); 
-        if (isNaN(date.getTime())) return "Invalid Date";
-        const options = {
-            weekday: 'long',
-            year: 'numeric',
-            month: 'long',
-            day: 'numeric'
-        };
-        return date.toLocaleDateString('en-US', options);
+    // Check if medication should be active today based on start/end dates
+    const isMedicationActiveToday = (medicine) => {
+        const today = new Date();
+        today.setHours(0, 0, 0, 0); 
+        
+        if (medicine.startDate) {
+            const startDate = new Date(medicine.startDate);
+            startDate.setHours(0, 0, 0, 0);
+            
+            if (startDate > today) {
+                return false;
+            }
+        }
+        
+        if (medicine.endDate) {
+            const endDate = new Date(medicine.endDate);
+            endDate.setHours(0, 0, 0, 0);
+            
+            if (endDate < today) {
+                return false;
+            }
+        }
+        
+        return true;
     };
 
     const cleanupOldAnalyticsData = async () => {
@@ -102,10 +111,15 @@ export default function MedicineList({ navigation }) {
         }
     };
     
-    // Load medicine statuses from AsyncStorage
     const loadMedicineStatuses = async (meds, dateKey) => {
         const initialStatus = {};
         for (const med of meds) {
+            // Don't load status for medications that haven't started yet
+            if (!isMedicationActiveToday(med)) {
+                initialStatus[med.id] = 'scheduled';
+                continue;
+            }
+            
             const statusKey = `${STATUS_STORAGE_KEY}${med.id}_${dateKey}`;
             try {
                 const status = await AsyncStorage.getItem(statusKey);
@@ -118,7 +132,6 @@ export default function MedicineList({ navigation }) {
         setMedicineStatus(initialStatus);
     };
 
-    // Load medicines from Firestore
     const loadMedicines = (userId) => {
         if (!userId) {
             setMedicines([]);
@@ -126,16 +139,13 @@ export default function MedicineList({ navigation }) {
             return () => {};
         }
         
-        // Clean up old data
         cleanupOldAnalyticsData();
         
-        // Setup Firestore query
         const medsQuery = query(
             collection(db, "medications"),
             where("userId", "==", userId)
         );
 
-        // Setup real-time listener
         const unsubscribe = onSnapshot(medsQuery, async (snapshot) => {
             try {
                 const dateKey = getCurrentDateKey();
@@ -145,7 +155,6 @@ export default function MedicineList({ navigation }) {
                     ...doc.data(),
                 }));
                 
-                // ADD LOGGING HERE (only on initial load)
                 if (fetchedMedicines.length > 0 && medicines.length === 0) {
                     await LoggingService.addLog(
                         'system',
@@ -171,7 +180,6 @@ export default function MedicineList({ navigation }) {
         return unsubscribe;
     };
 
-    // Auth state listener
     useEffect(() => {
         const authUnsubscribe = onAuthStateChanged(auth, firebaseUser => {
             setUser(firebaseUser);
@@ -191,14 +199,22 @@ export default function MedicineList({ navigation }) {
         return () => authUnsubscribe();
     }, []); 
 
-    // Get next reminder time
     const getNextReminderTime = (medicine) => {
+        // Check if medication is active
+        if (!isMedicationActiveToday(medicine)) {
+            if (medicine.startDate) {
+                const startDate = new Date(medicine.startDate);
+                return `Starts ${startDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`;
+            }
+            return 'Not yet active';
+        }
+
         if (!medicine.reminderTimes || medicine.reminderTimes.length === 0) {
             return 'No reminders set';
         }
 
         const now = new Date();
-        const currentTime = now.getHours() * 60 + now.getMinutes(); 
+        const currentTime = now.getHours() * 60 + now.getMinutes();
 
         const reminderMinutes = medicine.reminderTimes.map(timeStr => {
             const [time, meridiem] = timeStr.split(' ');
@@ -239,7 +255,6 @@ export default function MedicineList({ navigation }) {
         return 'No valid reminders';
     };
 
-    // Check if medicine should be taken today
     const isMedicineScheduledForToday = (medicine) => {
         const today = new Date();
         const dayOfWeek = today.getDay(); 
@@ -271,6 +286,11 @@ export default function MedicineList({ navigation }) {
             const newStatus = { ...medicineStatus };
 
             for (const med of medicines) {
+                // Skip medications that haven't started yet
+                if (!isMedicationActiveToday(med)) {
+                    continue;
+                }
+
                 if (!isMedicineScheduledForToday(med)) continue;
 
                 if (newStatus[med.id] === 'pending' && med.reminderTimes && med.reminderTimes.length > 0) {
@@ -343,7 +363,6 @@ export default function MedicineList({ navigation }) {
                             const medRef = doc(db, "medications", id);
                             await deleteDoc(medRef);
 
-                            // ADD LOGGING HERE
                             await LoggingService.addLog(
                                 'system',
                                 `Medicine deleted: ${medicine?.name || 'Unknown'}`,
@@ -368,13 +387,6 @@ export default function MedicineList({ navigation }) {
         );
     };
 
-    const handleView = (medicine) => {
-        navigation.navigate("MedicineDetails", {
-            medicine: medicine
-        });
-    };
-
-    // NEW FUNCTION: Decrease inventory quantity
     const decreaseInventoryQuantity = async (medicineId, medicineName) => {
         try {
             const medRef = doc(db, "medications", medicineId);
@@ -392,14 +404,12 @@ export default function MedicineList({ navigation }) {
                     
                     console.log(`Inventory decreased for ${medicineName}: ${currentQty} -> ${newQty}`);
                     
-                    // Log the inventory decrease
                     await LoggingService.addLog(
                         'inventory',
                         `Inventory decreased for ${medicineName}`,
                         `Quantity: ${currentQty} -> ${newQty} pills`
                     );
                     
-                    // Check if refill is needed
                     const refillReminder = currentData.refillReminder || 3;
                     if (newQty <= refillReminder) {
                         await LoggingService.addLog(
@@ -419,7 +429,6 @@ export default function MedicineList({ navigation }) {
             }
         } catch (error) {
             console.error('Failed to decrease inventory:', error);
-            // Don't show error alert to user, just log it
         }
     };
 
@@ -438,19 +447,15 @@ export default function MedicineList({ navigation }) {
             const medicineName = medicine ? medicine.name : 'Unknown';
             const medicineDosage = medicine ? medicine.dosage : 'N/A';
 
-            // Update status in AsyncStorage
             await AsyncStorage.setItem(statusKey, 'taken');
 
-            // Log to LoggingService
             await LoggingService.addLog(
                 'taken',
                 `Medicine marked as taken: ${medicineName}`,
                 `Dosage: ${medicineDosage}, Time: ${new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}, Status: ${currentStatus === 'missed' ? 'late (was missed)' : 'on-time'}`
             );
 
-            // Decrease inventory quantity
             await decreaseInventoryQuantity(medicineId, medicineName);
-
             await updateDailyProgress(medicineId, 'taken', medicineName);
 
             setMedicineStatus(prevStatus => ({
@@ -485,108 +490,52 @@ export default function MedicineList({ navigation }) {
         }
     };
 
-    const getStatusIcon = (status) => {
+    const getStatusBadge = (status) => {
         switch (status) {
             case 'taken':
-                return <AntDesign name="checkcircle" size={30} color="#5cb85c" />;
+                return {
+                    icon: 'check-circle',
+                    color: '#10B981',
+                    bg: '#D1FAE5',
+                    text: 'Taken'
+                };
             case 'missed':
-                return <AntDesign name="closecircle" size={30} color="#d9534f" />;
+                return {
+                    icon: 'cancel',
+                    color: '#EF4444',
+                    bg: '#FEE2E2',
+                    text: 'Missed'
+                };
+            case 'scheduled':
+                return {
+                    icon: 'schedule',
+                    color: '#6366F1',
+                    bg: '#E0E7FF',
+                    text: 'Scheduled'
+                };
             default:
-                return <AntDesign name="medicinebox" size={30} color="#757575" />;
+                return {
+                    icon: 'schedule',
+                    color: '#F59E0B',
+                    bg: '#FEF3C7',
+                    text: 'Pending'
+                };
         }
     };
 
-    // Get status text and color
-    const getStatusText = (status) => {
-        switch (status) {
-            case 'taken':
-                return { text: 'Taken', color: '#5cb85c' };
-            case 'missed':
-                return { text: 'Missed', color: '#d9534f' };
-            default:
-                return { text: 'Pending', color: '#757575' };
+    const checkInventoryCapacity = () => {
+        const totalPills = medicines.reduce((sum, med) => sum + (med.currentQuantity || 0), 0);
+        
+        if (totalPills >= 7) {
+            Alert.alert(
+                'Device Capacity Limit',
+                `Your watch device has only 7 compartments total. All slots are currently in use. Please reduce inventory before adding new medications.`,
+                [{ text: 'OK' }]
+            );
+            return false;
         }
-    };
-
-    // Filter medicines for today
-    const todaysMedicines = medicines.filter(medicine => isMedicineScheduledForToday(medicine));
-
-    // Render medicine item
-    const renderItem = (item) => {
-        const statusInfo = getStatusText(medicineStatus[item.id] || 'pending');
-        const itemName = item.name || '';
-        const itemDosage = item.dosage || '';
-        const currentQty = item.currentQuantity || 0;
-
-        return (
-            <View key={item.id} style={styles.medicineCard}>
-                <View style={styles.cardContent}>
-                    <View style={styles.medicineIconContainer}>
-                        {getStatusIcon(medicineStatus[item.id] || 'pending')}
-                    </View>
-
-                    <View style={styles.mainInfo}>
-                        <Text style={styles.medicineName}>{itemName}</Text>
-                        <Text style={styles.dosageFrequency}>Dose: {itemDosage}</Text>
-                        <Text style={styles.nextDose}>
-                            Next Dose: {getNextReminderTime(item)}
-                        </Text>
-                        {/* Show inventory quantity */}
-                        {currentQty !== undefined && (
-                            <Text style={[
-                                styles.inventoryText,
-                                currentQty <= (item.refillReminder || 3) && styles.inventoryLow
-                            ]}>
-                                Inventory: {currentQty} pill{currentQty !== 1 ? 's' : ''} left
-                            </Text>
-                        )}
-                        {item.reminderDates && item.reminderDates[0] && (
-                            <Text style={styles.startDate}>
-                                Started: {formatDateForDisplay(item.reminderDates[0])}
-                            </Text>
-                        )}
-                        {item.takeWithFood && (
-                            <Text style={styles.foodReminder}>Take with food</Text>
-                        )}
-                        <View style={styles.statusContainer}>
-                            <Text style={[styles.statusText, { color: statusInfo.color }]}>
-                                Status: {statusInfo.text}
-                            </Text>
-                        </View>
-                    </View>
-                </View>
-
-                <View style={styles.actionButtonsContainer}>
-                    {medicineStatus[item.id] !== 'taken' && (
-                        <TouchableOpacity
-                            style={[
-                                styles.takenButton,
-                                medicineStatus[item.id] === 'missed' && styles.takenButtonMissed
-                            ]}
-                            onPress={() => handleTaken(item.id)}
-                        >
-                            <Text style={styles.takenButtonText}>
-                                {medicineStatus[item.id] === 'missed' ? 'Late Take' : 'Taken'}
-                            </Text>
-                        </TouchableOpacity>
-                    )}
-
-                    <TouchableOpacity
-                        style={styles.viewButton}
-                        onPress={() => navigation.navigate("MedicineDetails", { medicine: item })}
-                    >
-                        <Text style={styles.viewButtonText}>View</Text>
-                    </TouchableOpacity>
-
-                    <TouchableOpacity
-                        style={styles.deleteActionButton}
-                        onPress={() => handleDelete(item.id)}
-                    >
-                        <Text style={styles.deleteActionButtonText}>Delete</Text>
-                    </TouchableOpacity>
-                </View>
-            </View>
-        );
+        
+        return true;
     };
 
     return (
@@ -597,277 +546,403 @@ export default function MedicineList({ navigation }) {
                 contentContainerStyle={styles.scrollContent}
             >
                 <View style={styles.header}>
-                    <Text style={styles.headerTitle}>My Meds</Text>
-                    <Text style={styles.headerDate}>{getFormattedDate()}</Text>
-                    <Text style={styles.headerSubtitle}>
-                        Today's Medications ({todaysMedicines.length})
-                    </Text>
+                    <Text style={styles.headerTitle}>My Medications</Text>
+                    <Text style={styles.headerDate}>{currentDate}</Text>
+                    <View style={styles.headerBadge}>
+                        <MaterialIcons name="event-note" size={16} color="#2563EB" />
+                        <Text style={styles.headerBadgeText}>
+                            {medicines.length} total medicines
+                        </Text>
+                    </View>
                 </View>
 
                 {isLoading ? (
-                    <View style={styles.loadingState}>
-                        <Text style={styles.emptyTitle}>Loading Medications...</Text>
-                        <Text style={styles.emptySubtitle}>Fetching data from the cloud.</Text>
+                    <View style={styles.emptyState}>
+                        <MaterialIcons name="hourglass-empty" size={64} color="#9CA3AF" />
+                        <Text style={styles.emptyTitle}>Loading...</Text>
+                        <Text style={styles.emptySubtitle}>
+                            Fetching your medications data
+                        </Text>
                     </View>
                 ) : !user ? (
                     <View style={styles.emptyState}>
-                        <View style={styles.emptyIcon}>
-                            <Text style={styles.emptyIconText}>🔒</Text>
-                        </View>
+                        <MaterialIcons name="lock-outline" size={64} color="#9CA3AF" />
                         <Text style={styles.emptyTitle}>Please Log In</Text>
-                        <Text style={styles.emptySubtitle}>Your medication list is private. Log in to access it.</Text>
-                        <TouchableOpacity 
-                            style={styles.loginButton} 
+                        <Text style={styles.emptySubtitle}>
+                            Sign in to view your medications
+                        </Text>
+                        <TouchableOpacity
+                            style={styles.primaryButton}
                             onPress={() => navigation.navigate("Login")}
                         >
-                            <Text style={styles.loginButtonText}>Go to Login</Text>
+                            <Text style={styles.primaryButtonText}>Go to Login</Text>
                         </TouchableOpacity>
                     </View>
+                ) : medicines.length === 0 ? (
+                    <View style={styles.emptyState}>
+                        <MaterialIcons name="medical-services" size={64} color="#9CA3AF" />
+                        <Text style={styles.emptyTitle}>No Medications</Text>
+                        <Text style={styles.emptySubtitle}>
+                            Add your first medication to get started.
+                        </Text>
+                    </View>
                 ) : (
-                    todaysMedicines.length === 0 ? (
-                        <View style={styles.emptyState}>
-                            <View style={styles.emptyIcon}>
-                                <Text style={styles.emptyIconText}>💊</Text>
-                            </View>
-                            <Text style={styles.emptyTitle}>
-                                {medicines.length === 0 ? 'No medicines yet' : 'No medicines scheduled for today'}
-                            </Text>
-                            <Text style={styles.emptySubtitle}>
-                                {medicines.length === 0
-                                    ? 'Add your medicines to start tracking'
-                                    : 'All your medicines are scheduled for other days'
-                                }
-                            </Text>
-                        </View>
-                    ) : (
-                        <View style={styles.listContainer}>
-                            {todaysMedicines.map((item) => renderItem(item))}
-                        </View>
-                    )
+                    <View style={styles.listContainer}>
+                        {medicines.map((item) => {
+                            const isActive = isMedicationActiveToday(item);
+                            const status = medicineStatus[item.id] || (isActive ? 'pending' : 'scheduled');
+                            const statusBadge = getStatusBadge(status);
+                            const currentQty = item.currentQuantity || 0;
+                            const nextReminderText = getNextReminderTime(item);
+                            const isLow = currentQty <= (item.refillReminder || 3);
+
+                            return (
+                                <View key={item.id} style={styles.medicineCard}>
+                                    <View style={styles.cardHeader}>
+                                        <View
+                                            style={[
+                                                styles.statusChip,
+                                                { backgroundColor: statusBadge.bg }
+                                            ]}
+                                        >
+                                            <MaterialIcons
+                                                name={statusBadge.icon}
+                                                size={16}
+                                                color={statusBadge.color}
+                                            />
+                                            <Text style={[styles.statusChipText, { color: statusBadge.color }]}>
+                                                {statusBadge.text}
+                                            </Text>
+                                        </View>
+                                    </View>
+
+                                    <Text style={styles.medicineName}>{item.name}</Text>
+                                    <Text style={styles.medicineDosage}>{item.dosage}</Text>
+
+                                    <View style={styles.detailsGrid}>
+                                        <View style={styles.detailBox}>
+                                            <Ionicons name="time-outline" size={18} color="#6B7280" />
+                                            <Text style={styles.detailLabel}>Next Dose</Text>
+                                            <Text style={styles.detailValue}>{nextReminderText}</Text>
+                                        </View>
+
+                                        <View style={styles.detailBox}>
+                                            <MaterialIcons name="inventory-2" size={18} color="#6B7280" />
+                                            <Text style={styles.detailLabel}>Inventory</Text>
+                                            <Text style={[styles.detailValue, isLow && { color: '#EF4444' }]}>
+                                                {currentQty} pill{currentQty !== 1 ? 's' : ''}
+                                            </Text>
+                                        </View>
+                                    </View>
+
+                                    {item.takeWithFood && (
+                                        <View style={styles.foodTag}>
+                                            <Ionicons name="restaurant-outline" size={16} color="#F59E0B" />
+                                            <Text style={styles.foodText}>Take with food</Text>
+                                        </View>
+                                    )}
+
+                                    <View style={styles.actionRow}>
+                                        {isActive && status !== 'taken' && (
+                                            <TouchableOpacity
+                                                style={[
+                                                    styles.actionButton,
+                                                    { backgroundColor: status === 'missed' ? '#F59E0B' : '#2563EB' }
+                                                ]}
+                                                onPress={() => handleTaken(item.id)}
+                                            >
+                                                <MaterialIcons name="check" size={18} color="#fff" />
+                                                <Text style={styles.actionButtonText}>
+                                                    {status === 'missed' ? 'Late Take' : 'Mark Taken'}
+                                                </Text>
+                                            </TouchableOpacity>
+                                        )}
+
+                                        <TouchableOpacity
+                                            style={[styles.actionButton, styles.detailsButton]}
+                                            onPress={() => navigation.navigate('MedicineDetails', { medicine: item })}
+                                        >
+                                            <MaterialIcons name="visibility" size={18} color="#2563EB" />
+                                            <Text style={styles.detailsButtonText}>Details</Text>
+                                        </TouchableOpacity>
+
+                                        <TouchableOpacity
+                                            style={[styles.actionButton, styles.deleteButton]}
+                                            onPress={() => handleDelete(item.id)}
+                                        >
+                                            <Text style={styles.deleteButtonText}>Delete</Text>
+                                        </TouchableOpacity>
+                                    </View>
+                                </View>
+                            );
+                        })}
+                    </View>
                 )}
             </ScrollView>
-            
+
             {user && (
                 <TouchableOpacity
-                    style={styles.floatingActionButton}
+                    style={styles.fab}
                     onPress={() => navigation.navigate("AddMedicine")}
                 >
-                    <AntDesign name="plus" size={24} color="#FFFFFF" />
+                    <MaterialIcons name="add" size={28} color="#fff" />
                 </TouchableOpacity>
             )}
         </SafeAreaView>
     );
 }
 
+
 const styles = StyleSheet.create({
-    container: {
-        flex: 1,
-        backgroundColor: '#f8f9fa',
+  container: {
+    flex: 1,
+    backgroundColor: "#F9FAFB",
+  },
+  scrollContent: {
+    paddingBottom: 120,
+  },
+  header: {
+    backgroundColor: "#fff",
+    paddingHorizontal: 20,
+    paddingTop: Platform.OS === "ios" ? 50 : 30,
+    paddingBottom: 20,
+    borderBottomWidth: 1,
+    borderBottomColor: "#E5E7EB",
+  },
+  headerTitle: {
+    fontSize: 28,
+    fontWeight: "700",
+    color: "#1E293B",
+  },
+  headerDate: {
+    fontSize: 15,
+    color: "#6B7280",
+    marginTop: 4,
+  },
+  headerBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#EEF2FF",
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 20,
+    marginTop: 10,
+    gap: 6,
+    alignSelf: "flex-start",
+  },
+  headerBadgeText: {
+    fontSize: 13,
+    fontWeight: "600",
+    color: "#2563EB",
+  },
+  listContainer: {
+    padding: 16,
+  },
+  medicineCard: {
+    backgroundColor: "#fff",
+    borderRadius: 16,
+    padding: 16,
+    marginBottom: 16,
+
+    borderWidth: 1,
+    borderColor: "#E5E7EB",
+      shadowColor: '#000',
+    shadowOffset: {
+      width: 0,
+      height: 2,
     },
-    scrollView: {
-        flex: 1,
-    },
-    scrollContent: {
-        paddingBottom: 100,
-    },
-    header: {
-        paddingHorizontal: 20,
-        paddingTop: Platform.OS === 'ios' ? 50 : 50,
-        marginBottom: 20,
-    },
-    headerTitle: {
-        fontSize: 28,
-        fontWeight: 'bold',
-        color: '#333',
-    },
-    headerDate: {
-        fontSize: 16,
-        color: '#666',
-        marginTop: 4,
-    },
-    headerSubtitle: {
-        fontSize: 16,
-        fontWeight: '500',
-        color: '#333',
-        marginTop: 10,
-    },
-    listContainer: {
-        padding: 16,
-    },
-    medicineCard: {
-        backgroundColor: '#fff',
-        borderRadius: 12,
-        padding: 16,
-        marginBottom: 12,
-        elevation: 2,
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.1,
-        shadowRadius: 4,
-    },
-    cardContent: {
-        flexDirection: 'row',
-        alignItems: 'flex-start',
-        marginBottom: 12,
-    },
-    medicineIconContainer: {
-        marginRight: 12,
-        alignItems: 'center',
-        justifyContent: 'center',
-    },
-    mainInfo: {
-        flex: 1,
-    },
-    medicineName: {
-        fontSize: 18,
-        fontWeight: 'bold',
-        color: '#333',
-        marginBottom: 4,
-    },
-    dosageFrequency: {
-        fontSize: 14,
-        color: '#666',
-        marginBottom: 2,
-    },
-    nextDose: {
-        fontSize: 14,
-        color: '#666',
-        marginBottom: 2,
-    },
-    inventoryText: {
-        fontSize: 14,
-        color: '#28a745',
-        fontWeight: '600',
-        marginTop: 4,
-    },
-    inventoryLow: {
-        color: '#dc3545',
-    },
-    startDate: {
-        fontSize: 14,
-        color: '#888',
-        marginTop: 4,
-        fontStyle: 'italic',
-    },
-    foodReminder: {
-        fontSize: 12,
-        color: '#ff9800',
-        fontStyle: 'italic',
-        marginBottom: 4,
-    },
-    statusContainer: {
-        marginTop: 4,
-    },
-    statusText: {
-        fontSize: 14,
-        fontWeight: '600',
-    },
-    actionButtonsContainer: {
-        flexDirection: 'row',
-        justifyContent: 'space-between',
-        gap: 6,
-        flexWrap: 'wrap',
-    },
-    takenButton: {
-        backgroundColor: '#28a745',
-        paddingVertical: 8,
-        paddingHorizontal: 12,
-        borderRadius: 8,
-        flex: 1,
-        minWidth: 70,
-    },
-    takenButtonMissed: {
-        backgroundColor: '#ffc107',
-    },
-    takenButtonText: {
-        color: '#fff',
-        fontSize: 12,
-        fontWeight: '600',
-        textAlign: 'center',
-    },
-    viewButton: {
-        backgroundColor: '#007bff',
-        paddingVertical: 8,
-        paddingHorizontal: 12,
-        borderRadius: 8,
-        flex: 1,
-        minWidth: 60,
-    },
-    viewButtonText: {
-        color: '#fff',
-        fontSize: 12,
-        fontWeight: '600',
-        textAlign: 'center',
-    },
-    deleteActionButton: {
-        backgroundColor: '#dc3545',
-        paddingVertical: 8,
-        paddingHorizontal: 12,
-        borderRadius: 8,
-        flex: 1,
-        minWidth: 70,
-    },
-    deleteActionButtonText: {
-        color: '#fff',
-        fontSize: 12,
-        fontWeight: '600',
-        textAlign: 'center',
-    },
-    emptyState: {
-        alignItems: 'center',
-        justifyContent: 'center',
-        padding: 32,
-        marginTop: 100,
-    },
-    emptyIcon: {
-        marginBottom: 16,
-    },
-    emptyIconText: {
-        fontSize: 64,
-    },
-    emptyTitle: {
-        fontSize: 24,
-        fontWeight: 'bold',
-        color: '#333',
-        marginBottom: 8,
-    },
-    emptySubtitle: {
-        fontSize: 16,
-        color: '#666',
-        textAlign: 'center',
-    },
-    floatingActionButton: {
-        position: 'absolute',
-        right: 16,
-        bottom: 16,
-        width: 56,
-        height: 56,
-        borderRadius: 28,
-        backgroundColor: '#007bff',
-        alignItems: 'center',
-        justifyContent: 'center',
-        elevation: 8,
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 4 },
-        shadowOpacity: 0.3,
-        shadowRadius: 8,
-    },
-    loginButton: {
-        marginTop: 20,
-        backgroundColor: '#007bff',
-        paddingVertical: 12,
-        paddingHorizontal: 25,
-        borderRadius: 8,
-    },
-    loginButtonText: {
-        color: '#fff',
-        fontSize: 16,
-        fontWeight: '600',
-    },
-    loadingState: {
-        alignItems: 'center',
-        justifyContent: 'center',
-        padding: 32,
-        marginTop: 100,
-    }
+    shadowOpacity: 0.1,
+    shadowRadius: 3.84,
+    elevation: 5,
+  },
+  
+  cardHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 10,
+  },
+  iconWrapper: {
+    width: 46,
+    height: 46,
+    borderRadius: 23,
+    backgroundColor: "#EEF2FF",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  medicineEmoji: { fontSize: 22 },
+  statusChip: {
+    flexDirection: "row",
+    alignItems: "center",
+    borderRadius: 16,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    gap: 4,
+  },
+  statusChipText: {
+    fontSize: 13,
+    fontWeight: "600",
+  },
+  medicineName: {
+    fontSize: 20,
+    fontWeight: "700",
+    color: "#111827",
+  },
+  medicineDosage: {
+    fontSize: 14,
+    color: "#6B7280",
+    marginBottom: 12,
+  },
+  detailsGrid: {
+    flexDirection: "row",
+    gap: 10,
+  },
+ detailBox: {
+  flex: 1,
+  backgroundColor: "#F3F4F6", // light gray background
+  borderRadius: 10,
+  paddingVertical: 10,
+  paddingHorizontal: 12,
+  alignItems: "flex-start",
+  justifyContent: "center",
+},
+detailLabel: {
+  fontSize: 12,
+  color: "#6B7280",
+  marginTop: 2,
+},
+detailValue: {
+  fontSize: 14,
+  fontWeight: "600",
+  color: "#1E293B",
+  marginTop: 2,
+},
+  foodTag: {
+    flexDirection: "row",
+    backgroundColor: "#FFFBEB",
+    padding: 8,
+    borderRadius: 8,
+    alignItems: "center",
+    gap: 6,
+    marginTop: 10,
+  },
+  foodText: {
+    color: "#D97706",
+    fontSize: 13,
+    fontWeight: "500",
+  },
+actionRow: {
+  flexDirection: "row",
+  alignItems: "center",
+  justifyContent: "space-between",
+  gap: 8,
+  marginTop: 10,
+},
+
+actionButton: {
+  flex: 1,
+  flexDirection: "row",
+  alignItems: "center",
+  justifyContent: "center",
+  borderRadius: 8,
+  paddingVertical: 10,
+  gap: 6,
+},
+
+actionButtonText: {
+  color: "#fff",
+  fontSize: 14,
+  fontWeight: "600",
+},
+
+detailsButton: {
+  backgroundColor: "#F3F4F6",
+  borderWidth: 1,
+  borderColor: "#E5E7EB",
+},
+detailsButtonText: {
+  color: "#2563EB",
+  fontSize: 14,
+  fontWeight: "600",
+},
+
+deleteButton: {
+  backgroundColor: "#F3F4F6",
+  borderWidth: 1,
+  borderColor: "#E5E7EB",
+},
+deleteButtonText: {
+  color: "#EF4444",
+  fontSize: 14,
+  fontWeight: "600",
+},
+  primaryButton: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#2563EB",
+    paddingVertical: 12,
+    borderRadius: 10,
+    gap: 6,
+  },
+  primaryButtonText: {
+    color: "#fff",
+    fontSize: 14,
+    fontWeight: "600",
+  },
+  secondaryButton: {
+    flexDirection: "row",
+    backgroundColor: "#EFF6FF",
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    borderRadius: 10,
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+  },
+  secondaryButtonText: {
+    color: "#2563EB",
+    fontSize: 14,
+    fontWeight: "600",
+  },
+  iconButton: {
+    backgroundColor: "#FEF2F2",
+    padding: 12,
+    borderRadius: 10,
+  },
+  emptyState: {
+    alignItems: "center",
+    justifyContent: "center",
+    padding: 40,
+    marginTop: 80,
+  },
+  emptyTitle: {
+    fontSize: 22,
+    fontWeight: "700",
+    color: "#111827",
+    marginTop: 10,
+  },
+  emptySubtitle: {
+    fontSize: 15,
+    color: "#6B7280",
+    textAlign: "center",
+    marginTop: 4,
+  },
+  fab: {
+    position: "absolute",
+    bottom: 25,
+    right: 20,
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    backgroundColor: "#2563EB",
+    alignItems: "center",
+    justifyContent: "center",
+    shadowColor: "#2563EB",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.25,
+    shadowRadius: 10,
+    elevation: 6,
+  },
 });
