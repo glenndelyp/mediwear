@@ -12,6 +12,7 @@ import {
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { MaterialIcons, Ionicons } from "@expo/vector-icons";
 import LoggingService from '../services/LoggingService';
+import { registerForPushNotificationsAsync, scheduleMedicineNotification, clearAllScheduledNotifications } from '../services/NotificationService';
 
 import { getAuth, onAuthStateChanged } from "firebase/auth";
 import { db } from '../services/firebaseConfig';
@@ -164,7 +165,19 @@ export default function MedicineList({ navigation }) {
                 }
                 
                 setMedicines(fetchedMedicines);
-                await loadMedicineStatuses(fetchedMedicines, dateKey);
+await loadMedicineStatuses(fetchedMedicines, dateKey);
+
+// Clear old notifications before rescheduling
+await clearAllScheduledNotifications();
+
+// Schedule notifications for each medicine’s reminders
+for (const med of fetchedMedicines) {
+  if (med.reminderTimes && med.reminderTimes.length > 0) {
+    for (const reminder of med.reminderTimes) {
+      await scheduleMedicineNotification(med.name, reminder);
+    }
+  }
+}
                 setCurrentDate(getFormattedDate());
                 setIsLoading(false);
 
@@ -198,6 +211,10 @@ export default function MedicineList({ navigation }) {
 
         return () => authUnsubscribe();
     }, []); 
+
+    useEffect(() => {
+  registerForPushNotificationsAsync();
+}, []);
 
     const getNextReminderTime = (medicine) => {
         // Check if medication is active
