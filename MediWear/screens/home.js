@@ -2,10 +2,11 @@ import React, { useState, useEffect } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, ScrollView, SafeAreaView, Alert } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useFocusEffect } from '@react-navigation/native';
-import { AntDesign, Entypo, FontAwesome5, Ionicons } from "@expo/vector-icons";
+import { AntDesign, Entypo, FontAwesome5 } from "@expo/vector-icons";
+import BluetoothService from '../services/BluetoothService'; 
 
 import { db, auth } from '../services/firebaseConfig';
-import { collection, query, where, getDocs } from 'firebase/firestore'; 
+import { collection, query, where, onSnapshot } from 'firebase/firestore'; 
 import { onAuthStateChanged } from 'firebase/auth';
 
 export default function Home({ navigation }) {
@@ -20,18 +21,17 @@ export default function Home({ navigation }) {
   const [weeklyProgress, setWeeklyProgress] = useState(0);
   const [streak, setStreak] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
+  const [watchAdherenceData, setWatchAdherenceData] = useState(null);
 
   const STATUS_STORAGE_KEY = 'medicine_status_';
   const DAILY_STATUS_KEY = 'daily_status_';
 
-  // Auth state listener
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (user) => {
       if (user) {
         setUserId(user.uid);
       } else {
         setUserId(null);
-        // Reset all state when user logs out
         setTodayMedicines([]);
         setMedicineStats({ totalDoses: 0, takenDoses: 0, missedDoses: 0, completionPercentage: 0 });
         setWeeklyProgress(0);
@@ -43,13 +43,11 @@ export default function Home({ navigation }) {
     return unsubscribe;
   }, []);
 
-  // Get current date in YYYY-MM-DD format
   const getCurrentDateKey = () => {
     const today = new Date();
     return today.toISOString().split('T')[0];
   };
 
-  // Calculate streak
   const calculateStreak = async () => {
     try {
       const allKeys = await AsyncStorage.getAllKeys();
@@ -98,7 +96,6 @@ export default function Home({ navigation }) {
     }
   };
 
-  // Calculate weekly progress
   const calculateWeeklyProgress = async () => {
     try {
       const today = new Date();
@@ -128,7 +125,6 @@ export default function Home({ navigation }) {
     }
   };
 
-  // Check if medicine should be taken today
   const isMedicineScheduledForToday = (medicine) => {
     const today = new Date();
     const dayOfWeek = today.getDay(); 
@@ -151,7 +147,6 @@ export default function Home({ navigation }) {
     }
   };
 
-  // Check for missed doses based on current time
   const checkMissedDoses = async (medicines) => {
     const now = new Date();
     const dateKey = getCurrentDateKey();
@@ -160,14 +155,12 @@ export default function Home({ navigation }) {
     const updatedMedicines = await Promise.all(
       medicines.map(async (med) => {
         if (med.status === 'pending' && med.reminderTimes && med.reminderTimes.length > 0) {
-          // Check each reminder time
           for (const reminderTime of med.reminderTimes) {
             const [time, meridiem] = reminderTime.split(' ');
             if (!time || !meridiem) continue;
             
             let [hours, minutes] = time.split(':').map(Number);
             
-            // Convert to 24-hour format
             if (meridiem.toLowerCase() === 'pm' && hours < 12) {
               hours += 12;
             }
@@ -178,16 +171,14 @@ export default function Home({ navigation }) {
             const doseTime = new Date();
             doseTime.setHours(hours, minutes, 0, 0);
             
-            // Add 10 minutes grace period
             const tenMinutesAfterDose = new Date(doseTime.getTime() + 10 * 60000);
             
             if (now > tenMinutesAfterDose && med.status === 'pending') {
-              // Update status to missed
               const statusKey = `${STATUS_STORAGE_KEY}${med.id}_${dateKey}`;
               await AsyncStorage.setItem(statusKey, 'missed');
               med.status = 'missed';
               hasChanges = true;
-              break; // Only need to mark as missed once
+              break; 
             }
           }
         }
@@ -198,88 +189,96 @@ export default function Home({ navigation }) {
     return { updatedMedicines, hasChanges };
   };
 
-  // Load medicines from Firestore and check local status
   const loadTodayMedicines = async () => {
     if (!userId) {
       setTodayMedicines([]);
       setMedicineStats({ totalDoses: 0, takenDoses: 0, missedDoses: 0, completionPercentage: 0 });
-      return;
+      return () => {};
     }
 
     try {
       const dateKey = getCurrentDateKey();
       
-      // 1. Fetch medicines from Firestore for the current user
+      // Use onSnapshot for real-time Firestore updates
       const q = query(
         collection(db, "medications"), 
         where("userId", "==", userId)
       );
-      const querySnapshot = await getDocs(q);
+      
+      const unsubscribe = onSnapshot(q, async (querySnapshot) => {
+        // Map Firestore documents to app data structure
+        const allMedicines = querySnapshot.docs.map(doc => ({
+          id: doc.id,
+          ...doc.data(),
+        }));
+        
+        // Filter for today's active medicines
+        const filteredMedicines = allMedicines.filter(med => 
+          med.reminderTimes && 
+          med.reminderTimes.length > 0 && 
+          med.reminderEnabled !== false &&
+          isMedicineScheduledForToday(med)
+        );
+        
+        // Load the status (taken/missed/pending) for each medicine from AsyncStorage
+        const medicinesWithStatus = await Promise.all(
+          filteredMedicines.map(async (med) => {
+            const statusKey = `${STATUS_STORAGE_KEY}${med.id}_${dateKey}`;
+            const status = await AsyncStorage.getItem(statusKey);
+            return {
+              ...med,
+              status: status || 'pending',
+            };
+          })
+        );
+        
+        // Check for and update missed doses locally
+        const { updatedMedicines } = await checkMissedDoses(medicinesWithStatus);
+        
+        setTodayMedicines(updatedMedicines);
 
-      // Map Firestore documents to app data structure
-      const allMedicines = querySnapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data(),
-      }));
-      
-      // 2. Filter for today's active medicines
-      const filteredMedicines = allMedicines.filter(med => 
-        med.reminderTimes && 
-        med.reminderTimes.length > 0 && 
-        med.reminderEnabled !== false &&
-        isMedicineScheduledForToday(med)
-      );
-      
-      // 3. Load the status (taken/missed/pending) for each medicine from AsyncStorage
-      const medicinesWithStatus = await Promise.all(
-        filteredMedicines.map(async (med) => {
-          const statusKey = `${STATUS_STORAGE_KEY}${med.id}_${dateKey}`;
-          const status = await AsyncStorage.getItem(statusKey);
-          return {
-            ...med,
-            status: status || 'pending',
-          };
-        })
-      );
-      
-      // 4. Check for and update missed doses locally
-      const { updatedMedicines } = await checkMissedDoses(medicinesWithStatus);
-      
-      setTodayMedicines(updatedMedicines);
+        // Calculate statistics
+        const totalDoses = updatedMedicines.length;
+        const takenDoses = updatedMedicines.filter(med => med.status === 'taken').length;
+        const missedDoses = updatedMedicines.filter(med => med.status === 'missed').length;
+        const completionPercentage = totalDoses > 0 ? Math.round((takenDoses / totalDoses) * 100) : 0;
+        
+        setMedicineStats({
+          totalDoses: totalDoses,
+          takenDoses: takenDoses,
+          missedDoses: missedDoses,
+          completionPercentage: completionPercentage
+        });
 
-      // 5. Calculate statistics and update daily progress storage
-      const totalDoses = updatedMedicines.length;
-      const takenDoses = updatedMedicines.filter(med => med.status === 'taken').length;
-      const missedDoses = updatedMedicines.filter(med => med.status === 'missed').length;
-      const completionPercentage = totalDoses > 0 ? Math.round((takenDoses / totalDoses) * 100) : 0;
-      
-      setMedicineStats({
-        totalDoses: totalDoses,
-        takenDoses: takenDoses,
-        missedDoses: missedDoses,
-        completionPercentage: completionPercentage
+        // Update daily progress storage for streak/weekly calculation
+        if (totalDoses > 0) {
+          const progressKey = `${DAILY_STATUS_KEY}${dateKey}`;
+          const progressData = {};
+          
+          updatedMedicines.forEach(med => {
+            progressData[med.id] = {
+              status: med.status,
+              timestamp: new Date().toISOString(),
+              medicineName: med.name || 'Unknown Medicine'
+            };
+          });
+          
+          await AsyncStorage.setItem(progressKey, JSON.stringify(progressData));
+        }
+      }, (error) => {
+        console.error('Failed to load today\'s medicines from Firestore:', error);
+        Alert.alert("Error", "Could not load medicine schedule. Check your internet or login status.");
+        setTodayMedicines([]);
+        setMedicineStats({ totalDoses: 0, takenDoses: 0, missedDoses: 0, completionPercentage: 0 });
       });
 
-      // 6. Update daily progress storage for streak/weekly calculation
-      if (totalDoses > 0) {
-        const progressKey = `${DAILY_STATUS_KEY}${dateKey}`;
-        const progressData = {};
-        
-        updatedMedicines.forEach(med => {
-          progressData[med.id] = {
-            status: med.status,
-            timestamp: new Date().toISOString(),
-            medicineName: med.name || 'Unknown Medicine'
-          };
-        });
-        
-        await AsyncStorage.setItem(progressKey, JSON.stringify(progressData));
-      }
+      return unsubscribe;
     } catch (error) {
-      console.error('Failed to load today\'s medicines from Firestore:', error);
-      Alert.alert("Error", "Could not load medicine schedule. Check your internet or login status.");
+      console.error('Failed to set up Firestore listener:', error);
+      Alert.alert("Error", "Could not load medicine schedule.");
       setTodayMedicines([]);
       setMedicineStats({ totalDoses: 0, takenDoses: 0, missedDoses: 0, completionPercentage: 0 });
+      return () => {};
     }
   };
 
@@ -305,8 +304,27 @@ export default function Home({ navigation }) {
       
       await AsyncStorage.setItem(progressKey, JSON.stringify(progress));
       
-      // Reload data to update UI and recalculate stats
-      await loadTodayMedicines();
+      setTodayMedicines(prevMeds => 
+        prevMeds.map(med => 
+          med.id === medicineId ? { ...med, status: 'taken' } : med
+        )
+      );
+
+      const updatedMeds = todayMedicines.map(med => 
+        med.id === medicineId ? { ...med, status: 'taken' } : med
+      );
+      const totalDoses = updatedMeds.length;
+      const takenDoses = updatedMeds.filter(med => med.status === 'taken').length;
+      const missedDoses = updatedMeds.filter(med => med.status === 'missed').length;
+      const completionPercentage = totalDoses > 0 ? Math.round((takenDoses / totalDoses) * 100) : 0;
+      
+      setMedicineStats({
+        totalDoses,
+        takenDoses,
+        missedDoses,
+        completionPercentage
+      });
+      
       await calculateWeeklyProgress();
       
       Alert.alert('Success', 'Medicine marked as taken!');
@@ -316,30 +334,54 @@ export default function Home({ navigation }) {
     }
   };
 
-  // Load data when component focuses and user is available
   useFocusEffect(
     React.useCallback(() => {
-      if (!userId) return; // Wait for userId to be set
+      if (!userId) return; 
+      
+      let unsubscribe;
       
       const loadData = async () => {
-        await loadTodayMedicines();
+        unsubscribe = await loadTodayMedicines();
         await calculateStreak();
         await calculateWeeklyProgress();
       };
+      
       loadData();
+
+      return () => {
+        if (unsubscribe && typeof unsubscribe === 'function') {
+          unsubscribe();
+        }
+      };
     }, [userId])
   );
 
-  // Periodic check for missed doses
   useEffect(() => {
-    if (!userId) return; // Only run if user is logged in
+    if (!userId) return; 
     
-    const interval = setInterval(() => {
-      loadTodayMedicines();
+    const interval = setInterval(async () => {
+      if (todayMedicines.length > 0) {
+        const { updatedMedicines, hasChanges } = await checkMissedDoses(todayMedicines);
+        if (hasChanges) {
+          setTodayMedicines(updatedMedicines);
+          
+          const totalDoses = updatedMedicines.length;
+          const takenDoses = updatedMedicines.filter(med => med.status === 'taken').length;
+          const missedDoses = updatedMedicines.filter(med => med.status === 'missed').length;
+          const completionPercentage = totalDoses > 0 ? Math.round((takenDoses / totalDoses) * 100) : 0;
+          
+          setMedicineStats({
+            totalDoses,
+            takenDoses,
+            missedDoses,
+            completionPercentage
+          });
+        }
+      }
     }, 60000);
 
     return () => clearInterval(interval);
-  }, [userId]);
+  }, [userId, todayMedicines]);
 
   const getCurrentDate = () => {
     const today = new Date();
@@ -378,6 +420,28 @@ export default function Home({ navigation }) {
     }
   };
 
+  useEffect(() => {
+  const unsubscribe = BluetoothService.subscribe((data) => {
+    if (data.type === 'ADHERENCE_DATA') {
+      console.log('Adherence received:', data.data);
+      setWatchAdherenceData(data.data);
+    }
+  });
+
+  // Request adherence data on mount
+  fetchWatchAdherence();
+
+  return () => unsubscribe();
+}, []);
+
+const fetchWatchAdherence = async () => {
+  try {
+    await BluetoothService.requestAdherence();
+  } catch (error) {
+    console.error('Error fetching adherence:', error);
+  }
+};
+
   const getAdherenceStatus = () => {
     const { completionPercentage } = medicineStats;
     
@@ -394,7 +458,11 @@ export default function Home({ navigation }) {
 
   const adherenceStatus = getAdherenceStatus();
 
-  // Show loading state
+const watchAdherenceStatus = (watchAdherenceData && watchAdherenceData.percentage !== undefined)
+  ? getAdherenceStatus(watchAdherenceData.percentage)
+  : { text: 'Syncing...', color: '#999', percentage: 0 };
+
+  
   if (isLoading) {
     return (
       <SafeAreaView style={styles.container}>
@@ -405,7 +473,6 @@ export default function Home({ navigation }) {
     );
   }
 
-  // Show login prompt if no user
   if (!userId) {
     return (
       <SafeAreaView style={styles.container}>
@@ -431,7 +498,9 @@ export default function Home({ navigation }) {
         showsVerticalScrollIndicator={false}
         contentContainerStyle={{ paddingBottom: 120 }}
       >
-        {/* Header Card */}
+
+
+
         <View style={styles.headerCard}>
           <View style={styles.headerContent}>
             <Text style={styles.greeting}>{getCurrentTime()}</Text>
@@ -457,7 +526,8 @@ export default function Home({ navigation }) {
           </View>
         </View>
 
-        {/* Today's Progress */}
+
+
         <View style={styles.progressSection}>
           <Text style={styles.sectionTitle}>Today's Progress</Text>
           <View style={styles.progressCard}>
@@ -486,27 +556,32 @@ export default function Home({ navigation }) {
           </View>
         </View>
 
-        {/* Smart Adherence System */}
-        <View style={styles.adherenceSection}>
-          <View style={styles.adherenceHeader}>
-            <Text style={styles.adherenceTitle}>Smart Adherence System</Text>
-          </View>
-          <View style={styles.adherenceCard}>
-            <View style={styles.adherenceRow}>
-              <View style={styles.adherenceLeft}>
-                <View style={[styles.connectionDot, { backgroundColor: adherenceStatus.color }]}></View>
-                <Text style={styles.adherenceText}>{adherenceStatus.text}</Text>
-              </View>
-              <View style={styles.adherenceRight}>
-                <Text style={[styles.adherencePercentage, { color: adherenceStatus.color }]}>
-                  {adherenceStatus.percentage}%
-                </Text>
-              </View>
-            </View>
-          </View>
-        </View>
 
-        {/* Today's Medications */}
+
+
+<View style={styles.adherenceSection}>
+  <Text style={styles.sectionTitle}>System Adherence</Text>
+  <View style={styles.adherenceRow}>
+    <View style={[styles.adherenceCard, { backgroundColor: '#fff' }]}>
+      <View style={[styles.connectionDot, { backgroundColor: adherenceStatus.color }]}></View>
+      <Text style={styles.adherencePercentage}>
+        {adherenceStatus.percentage}%
+      </Text>
+      <Text style={styles.adherenceLabel}>Smart Adherence</Text>
+    
+    </View>
+    
+    <View style={[styles.adherenceCard, { backgroundColor: '#fff' }]}>
+      <View style={[styles.connectionDot, { backgroundColor: adherenceStatus.color }]}></View>
+      <Text style={styles.adherencePercentage}>
+        {adherenceStatus.percentage}%
+      </Text>
+      <Text style={styles.adherenceLabel}>Watch Adherence</Text>
+
+    </View>
+  </View>
+</View>
+
         <View style={styles.medicationsSection}>
           <View style={styles.medicationsHeader}>
             <Text style={styles.sectionTitle}>Today's Medications</Text>
@@ -704,11 +779,12 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     color: '#333',
     marginBottom: 16,
+    paddingTop: 20,
   },
   progressCard: {
     backgroundColor: '#fff',
     borderRadius: 16,
-    padding: 20,
+    padding: 15,
     flexDirection: 'row',
     alignItems: 'center',
     shadowColor: '#000',
@@ -761,57 +837,66 @@ const styles = StyleSheet.create({
     marginTop: 4,
   },
   adherenceSection: {
-    margin: 20,
-    marginTop: 0,
+  marginBottom: 12,
+  paddingHorizontal: 20, // Add padding if needed for alignment with other sections
+},
+adherenceHeader: {
+  marginBottom: 16,
+},
+adherenceTitle: {
+  fontSize: 20,
+  fontWeight: 'bold',
+  color: '#333',
+},
+
+adherenceRow: {
+  flexDirection: 'row',
+  gap: 12,
+  marginBottom: 12,
+},
+
+adherenceCard: {
+  flex: 1,
+  aspectRatio: 1, 
+  padding: 20,
+  borderRadius: 16,
+  alignItems: 'center',
+  justifyContent: 'center', 
+  backgroundColor: '#fff',
+  shadowColor: '#000',
+  shadowOffset: {
+    width: 0,
+    height: 2,
   },
-  adherenceHeader: {
-    marginBottom: 16,
-  },
-  adherenceTitle: {
-    fontSize: 20,
-    fontWeight: 'bold',
-    color: '#333',
-  },
-  adherenceCard: {
-    backgroundColor: '#fff',
-    borderRadius: 16,
-    padding: 20,
-    shadowColor: '#000',
-    shadowOffset: {
-      width: 0,
-      height: 2,
-    },
-    shadowOpacity: 0.1,
-    shadowRadius: 3.84,
-    elevation: 5,
-  },
-  adherenceRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  adherenceLeft: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  connectionDot: {
-    width: 12,
-    height: 12,
-    borderRadius: 6,
-    marginRight: 12,
-  },
-  adherenceText: {
-    fontSize: 16,
-    fontWeight: '500',
-    color: '#333',
-  },
-  adherenceRight: {
-    alignItems: 'center',
-  },
-  adherencePercentage: {
-    fontSize: 20,
-    fontWeight: 'bold',
-  },
+  shadowOpacity: 0.1,
+  shadowRadius: 3.84,
+  elevation: 5,
+},
+
+connectionDot: {
+  width: 12,
+  height: 12,
+  borderRadius: 6,
+  marginBottom: 10,
+},
+
+adherencePercentage: {
+  fontSize: 32,
+  fontWeight: 'bold',
+  marginBottom: 5,
+},
+
+adherenceLabel: {
+  fontSize: 14,
+  color: '#666',
+  marginTop: 5,
+},
+
+adherenceSubLabel: {
+  fontSize: 14,
+  color: '#666',
+},
+
   medicationsSection: {
     margin: 20,
     marginTop: 0,
