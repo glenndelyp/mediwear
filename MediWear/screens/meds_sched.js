@@ -414,13 +414,11 @@ const decrementPillQuantity = () => {
 
   const handleAddMedication = async () => {
     try {
-      // Validation
       if (!selectedMedicine.trim() || !selectedDosage.trim()) {
         Alert.alert('Oh no..', 'Please fill in required fields');
         return;
       }
 
-      // NEW: Validate pill quantity
        if (!pillQuantity || parseInt(pillQuantity) <= 0 || parseInt(pillQuantity) > 7) {
          Alert.alert('Oh no..', 'Please enter the number of pills you will put in the device (1–7)');
          return;
@@ -445,27 +443,28 @@ const decrementPillQuantity = () => {
 
       const formattedReminderTimes = reminderTimes.map(time => formatTime12Hour(time));
 
-      const medicineData = {
-        ...(isEditing && { id: editingMedicine.id }),
-        userId: user.uid,
-        name: selectedMedicine,
-        dosage: selectedDosage,
-        frequency: frequency,
-        days: days,
-        reminderTimes: formattedReminderTimes,
-        reminderDates: reminderDatesList.map(date => date.toISOString()),
-        reminderEnabled: reminderEnabled,
-        takeWithFood: takeWithFood,
-        specialInstructions: specialInstructions,
-        
-        // NEW: Inventory fields
-        pillQuantity: parseInt(pillQuantity),
-        currentQuantity: isEditing ? editingMedicine.currentQuantity : parseInt(pillQuantity),
-        refillReminder: refillReminder,
-        
-        isEditing: isEditing,
-        updatedAt: serverTimestamp(),
-      };
+const medicineData = {
+    ...(isEditing && { id: editingMedicine.id }),
+    userId: user.uid,
+    name: selectedMedicine,
+    dosage: selectedDosage,
+    frequency: frequency,
+    days: days,
+    reminderTimes: formattedReminderTimes,
+    reminderDates: reminderDatesList.map(date => date.toISOString()),
+    reminderEnabled: reminderEnabled,
+    takeWithFood: takeWithFood,
+    specialInstructions: specialInstructions,
+    
+    startDate: reminderDatesList[0] ? reminderDatesList[0].toISOString() : new Date().toISOString(),
+    
+    pillQuantity: parseInt(pillQuantity),
+    currentQuantity: isEditing ? editingMedicine.currentQuantity : parseInt(pillQuantity),
+    refillReminder: refillReminder,
+    
+    isEditing: isEditing,
+    updatedAt: serverTimestamp(),
+};
 
       if (isEditing && !fromAlertSettings) {
         const medicineRef = doc(db, "medications", editingMedicine.id);
