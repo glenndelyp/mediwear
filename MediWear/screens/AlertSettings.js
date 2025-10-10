@@ -12,35 +12,31 @@ import {
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { AntDesign } from '@expo/vector-icons';
-import NotificationService from '../services/NotificationService';
-import BluetoothService from '../services/BluetoothService'; 
-import { db, auth } from '../services/firebaseConfig'; 
-import { collection, doc, setDoc, updateDoc, serverTimestamp } from 'firebase/firestore'; 
+import BluetoothService from '../services/BluetoothService';
+import { db, auth } from '../services/firebaseConfig';
+import { collection, doc, setDoc, updateDoc, serverTimestamp } from 'firebase/firestore';
+
+// ✅ Add this import at the top
+import {
+  registerForPushNotificationsAsync,
+  scheduleMedicineNotification,
+  clearAllScheduledNotifications,
+} from '../services/NotificationService';
 
 export default function AlertSettings({ navigation, route }) {
   const medicineData = route?.params?.medicineData;
-  const user = auth.currentUser; 
-  
-  const [alertType, setAlertType] = useState('both'); 
+  const user = auth.currentUser;
+
+  const [alertType, setAlertType] = useState('both');
   const [earlyReminder, setEarlyReminder] = useState(false);
   const [waitOption, setWaitOption] = useState(false);
 
   const progressSteps = ['Medicine Details', 'Alert Settings', 'Complete'];
-  const currentStep = 1; 
+  const currentStep = 1;
 
   const alertTypeOptions = [
-    {
-      id: 'phone',
-      icon: '📱',
-      title: 'Phone Only',
-      subtitle: 'Alerts on your phone',
-    },
-    {
-      id: 'watch',
-      icon: '⌚',
-      title: 'Watch Only',
-      subtitle: 'Alerts on your smart watch',
-    },
+    { id: 'phone', icon: '📱', title: 'Phone Only', subtitle: 'Alerts on your phone' },
+    { id: 'watch', icon: '⌚', title: 'Watch Only', subtitle: 'Alerts on your smart watch' },
     {
       id: 'both',
       icon: '📱⌚',
@@ -50,12 +46,13 @@ export default function AlertSettings({ navigation, route }) {
     },
   ];
 
+  // ✅ Complete button handler
   const handleCompleteSetup = async () => {
     if (!medicineData) {
       Alert.alert('Error', 'Medicine data is missing');
       return;
     }
-    
+
     if (!user) {
       Alert.alert('Authentication Error', 'You must be logged in');
       navigation.navigate('Login');
@@ -64,63 +61,66 @@ export default function AlertSettings({ navigation, route }) {
 
     const finalMedicineData = {
       ...medicineData,
-      alertSettings: {
-        alertType,
-        earlyReminder,
-        waitOption,
-      },
+      alertSettings: { alertType, earlyReminder, waitOption },
     };
 
     try {
-      // Save to Firestore first and get the ID
+      // Request permission for notifications
+      const permission = await registerForPushNotificationsAsync();
+      if (!permission) {
+        Alert.alert(
+          'Notification Permission',
+          'Please enable notifications in your settings to receive reminders.'
+        );
+      }
+
+      // Save to Firestore
       const finalId = await saveToFirestore(finalMedicineData);
-      
-      // Add the ID to the medication data
       const medicationWithId = { ...finalMedicineData, id: finalId };
-      
-      // Ask user if they want to sync to device
-      Alert.alert(
-        'Sync to MediWear?',
-        'Would you like to sync this medication to your MediWear device now?',
-        [
-          {
-            text: 'Skip',
-            style: 'cancel',
-            onPress: () => finishSetup(medicationWithId, false) // false = no sync attempted
-          },
-          {
-            text: 'Sync Now',
-            onPress: () => syncToDevice(medicationWithId)
-          }
-        ]
-      );
-      
+
+      // ✅ Schedule notifications if reminders are enabled
+      if (medicationWithId.reminderEnabled && medicationWithId.reminderTimes?.length > 0) {
+        await clearAllScheduledNotifications(); // optional: clears old ones
+        for (const time of medicationWithId.reminderTimes) {
+          await scheduleMedicineNotification(medicationWithId.name, time);
+        }
+        console.log(`✅ Notifications scheduled for ${medicationWithId.name}`);
+      }
+
+      // Ask user to sync
+      Alert.alert('Sync to MediWear?', 'Would you like to sync this medication to your MediWear device now?', [
+        {
+          text: 'Skip',
+          style: 'cancel',
+          onPress: () => finishSetup(medicationWithId, false),
+        },
+        {
+          text: 'Sync Now',
+          onPress: () => syncToDevice(medicationWithId),
+        },
+      ]);
     } catch (error) {
       console.error('Failed to save medicine:', error);
       Alert.alert('Error', 'Failed to save medication. Please try again.');
     }
   };
 
+  // ✅ Sync to device
   const syncToDevice = async (medicationData) => {
     try {
-      // Check if device is connected
       const connectionStatus = BluetoothService.getConnectionStatus();
-      
+
       if (!connectionStatus.isConnected) {
-        Alert.alert(
-          'No Device Connected',
-          'Please connect to your MediWear device first',
-          [
-            { text: 'OK', onPress: () => finishSetup(medicationData) }
-          ]
-        );
+        Alert.alert('No Device Connected', 'Please connect to your MediWear device first', [
+          { text: 'OK', onPress: () => finishSetup(medicationData) },
+        ]);
         return;
       }
-      
+
       Alert.alert('Syncing...', 'Sending to MediWear device. Please check your watch.');
-      
+
       const response = await BluetoothService.syncMedicationToDevice(medicationData);
-      
+
       if (response.success) {
         Alert.alert(
           'Confirmed! ✓',
@@ -130,48 +130,32 @@ export default function AlertSettings({ navigation, route }) {
       } else {
         Alert.alert(
           'Declined',
-          response.message || 'Medication was declined on device. It has been saved to your account but not added to device.',
+          response.message || 'Medication declined on device. Saved only to account.',
           [{ text: 'OK', onPress: () => finishSetup(medicationData) }]
         );
       }
-      
     } catch (error) {
       console.error('Sync error:', error);
-      
-      // Handle timeout specifically
+
       if (error.message === 'Device confirmation timeout') {
-        Alert.alert(
-          'Sync Timeout',
-          'No response from device. Please check your MediWear device. Medication was saved to your account.',
-          [{ text: 'OK', onPress: () => finishSetup(medicationData) }]
-        );
+        Alert.alert('Sync Timeout', 'No response from device.', [
+          { text: 'OK', onPress: () => finishSetup(medicationData) },
+        ]);
       } else {
-        Alert.alert(
-          'Sync Failed',
-          'Could not sync to device, but medication was saved to your account.',
-          [{ text: 'OK', onPress: () => finishSetup(medicationData) }]
-        );
+        Alert.alert('Sync Failed', 'Could not sync, but medication was saved.', [
+          { text: 'OK', onPress: () => finishSetup(medicationData) },
+        ]);
       }
     }
   };
 
   const finishSetup = async (medicationData) => {
-    try {
-      if (medicationData.reminderEnabled && medicationData.reminderTimes?.length > 0) {
-        await NotificationService.scheduleNextMedicationNotification(medicationData);
-        console.log(`Scheduled notifications for ${medicationData.name}`);
-      }
-    } catch (error) {
-      console.error('Failed to schedule notifications:', error);
-    }
-    
+    console.log(`Medication ${medicationData.name} saved successfully`);
     showSuccessAlert(medicationData.isEditing);
   };
 
   const saveToFirestore = async (data) => {
-    if (!user) {
-      throw new Error("User not logged in.");
-    }
+    if (!user) throw new Error('User not logged in.');
 
     const { alertSettings, isEditing, id, ...medData } = data;
 
@@ -179,46 +163,35 @@ export default function AlertSettings({ navigation, route }) {
       userId: user.uid,
       ...medData,
       alertSettings,
-      reminderEnabled: medData.reminderEnabled, 
+      reminderEnabled: medData.reminderEnabled,
       updatedAt: serverTimestamp(),
     };
 
     if (isEditing && id) {
-      const medicineRef = doc(db, "medications", id);
+      const medicineRef = doc(db, 'medications', id);
       await updateDoc(medicineRef, firestoreData);
-      console.log("Medication updated in Firestore:", id);
+      console.log('Medication updated in Firestore:', id);
       return id;
     } else {
-      const newMedRef = doc(collection(db, "medications"));
+      const newMedRef = doc(collection(db, 'medications'));
       await setDoc(newMedRef, {
         ...firestoreData,
         createdAt: serverTimestamp(),
-        id: newMedRef.id 
+        id: newMedRef.id,
       });
-      console.log("New medication added to Firestore:", newMedRef.id);
+      console.log('New medication added to Firestore:', newMedRef.id);
       return newMedRef.id;
     }
   };
 
   const showSuccessAlert = (isEditing) => {
-    Alert.alert(
-      'Success!', 
-      `Medication ${isEditing ? 'updated' : 'added'} successfully!`,
-      [
-        {
-          text: 'OK',
-          onPress: () => navigation.navigate('Home'),
-        },
-      ]
-    );
+    Alert.alert('Success!', `Medication ${isEditing ? 'updated' : 'added'} successfully!`, [
+      { text: 'OK', onPress: () => navigation.navigate('Home') },
+    ]);
   };
 
   const handleBack = () => {
-    // Pass the medicine data back to AddMedicine screen
-    navigation.navigate('AddMedicine', { 
-      medicine: medicineData,
-      fromAlertSettings: true 
-    });
+    navigation.navigate('AddMedicine', { medicine: medicineData, fromAlertSettings: true });
   };
 
   return (
