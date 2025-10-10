@@ -13,7 +13,7 @@ import {
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { AntDesign } from '@expo/vector-icons';
 import NotificationService from '../services/NotificationService';
-import BluetoothService from '../services/BluetoothService'; // ADD THIS IMPORT
+import BluetoothService from '../services/BluetoothService'; 
 import { db, auth } from '../services/firebaseConfig'; 
 import { collection, doc, setDoc, updateDoc, serverTimestamp } from 'firebase/firestore'; 
 
@@ -117,13 +117,10 @@ export default function AlertSettings({ navigation, route }) {
         return;
       }
       
-      // Show syncing indicator
       Alert.alert('Syncing...', 'Sending to MediWear device. Please check your watch.');
       
-      // Send to device and wait for confirmation
       const response = await BluetoothService.syncMedicationToDevice(medicationData);
       
-      // Response will have type: 'SYNC_RESPONSE' and success: boolean
       if (response.success) {
         Alert.alert(
           'Confirmed! ✓',
@@ -159,7 +156,6 @@ export default function AlertSettings({ navigation, route }) {
   };
 
   const finishSetup = async (medicationData) => {
-    // Schedule notifications if enabled
     try {
       if (medicationData.reminderEnabled && medicationData.reminderTimes?.length > 0) {
         await NotificationService.scheduleNextMedicationNotification(medicationData);
@@ -370,7 +366,7 @@ export default function AlertSettings({ navigation, route }) {
   );
 }
 
-// You'll need to add your styles here
+
 const styles = StyleSheet.create({
   container: {
     flex: 1,
