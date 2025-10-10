@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect } from 'react';
 import {
   View,
@@ -133,8 +132,8 @@ export default function Inventory({ navigation }) {
 
   const renderMedicineCard = (medicine) => {
     const currentQty = medicine.currentQuantity || 0;
-    const totalQty = 7; // Fixed to device capacity
-    const refillAt = medicine.refillReminder || 3;
+    const totalQty = 7; 
+    const refillAt = medicine.refillReminder || 1;
     const needsRefill = currentQty <= refillAt;
     const progressColor = getProgressColor(currentQty, totalQty);
 
@@ -219,14 +218,14 @@ export default function Inventory({ navigation }) {
               style={styles.refillButton}
               onPress={() => updateRefillReminder(medicine.id, refillAt, -1)}
             >
-              <MaterialIcons name="remove" size={14} color="#6C63FF" />
+             <Text style={styles.quantityButtonText}>-1</Text>
             </TouchableOpacity>
             <Text style={styles.refillValue}>{refillAt} pills</Text>
             <TouchableOpacity
               style={styles.refillButton}
               onPress={() => updateRefillReminder(medicine.id, refillAt, 1)}
             >
-              <MaterialIcons name="add" size={14} color="#6C63FF" />
+              <Text style={styles.quantityButtonText}>+1</Text>
             </TouchableOpacity>
           </View>
         </View>
